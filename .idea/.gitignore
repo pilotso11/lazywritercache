@@ -13,4 +13,16 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
-/test.db
+
+# Default ignored files
+/shelf/
+/workspace.xml
+# Editor-based HTTP Client requests
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+/vcs.xml
+/modules.xml
+/lazywritecache.iml
+/dataSources.xml

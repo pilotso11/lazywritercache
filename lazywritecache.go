@@ -1,6 +1,24 @@
-/*
- * Copyright (c) 2023. Vade Mecum Ltd.  All Rights Reserved.
- */
+// MIT License
+//
+// Copyright (c) 2023 Seth Osher
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package lazywritercache
 
@@ -11,42 +29,42 @@ import (
 	"time"
 )
 
-type CacheItem interface {
+type Cacheable interface {
 	Key() interface{}
-	CopyKeyDataFrom(from CacheItem) CacheItem // This should copy in DB only ID fields.  If gorm.Model is implement this is ID, creationTime, updateTime, deleteTime
+	CopyKeyDataFrom(from Cacheable) Cacheable // This should copy in DB only ID fields.  If gorm.Model is implement this is ID, creationTime, updateTime, deleteTime
 }
 
-// EmptyCacheItem - placeholder used as a return value if the cache can't find anything
-type EmptyCacheItem struct {
+// EmptyCacheable - placeholder used as a return value if the cache can't find anything
+type EmptyCacheable struct {
 }
 
-func (i EmptyCacheItem) Key() interface{} {
+func (i EmptyCacheable) Key() interface{} {
 	return ""
 }
 
-func (i EmptyCacheItem) CopyKeyDataFrom(from CacheItem) CacheItem {
+func (i EmptyCacheable) CopyKeyDataFrom(from Cacheable) Cacheable {
 	return from // no op
 }
 
-type CacheReaderWriter interface {
-	Find(key interface{}, tx interface{}) (CacheItem, error)
-	Save(item CacheItem, tx interface{}) error
+type CacheReaderWriter[T Cacheable] interface {
+	Find(key interface{}, tx interface{}) (T, error)
+	Save(item T, tx interface{}) error
 	BeginTx() (tx interface{}, err error)
 	CommitTx(tx interface{})
 	Info(msg string)
 	Warn(msg string)
 }
 
-type Config struct {
-	handler      CacheReaderWriter
+type Config[T Cacheable] struct {
+	handler      CacheReaderWriter[T]
 	Limit        int
 	LookupOnMiss bool // If true, a cache miss will query the DB, with associated performance hit!
 	WriteFreq    time.Duration
 	PurgeFreq    time.Duration
 }
 
-func NewDefaultConfig(handler CacheReaderWriter) Config {
-	return Config{
+func NewDefaultConfig[T Cacheable](handler CacheReaderWriter[T]) Config[T] {
+	return Config[T]{
 		handler:      handler,
 		Limit:        10000,
 		LookupOnMiss: true,
@@ -78,9 +96,9 @@ func (s *CacheStats) JSON() string {
 // There is no synchronisation on Save or any error handling if the DB is in an inconsistent state
 // To use this in a distributed mode, we'd need to replace it with something like REDIS that keeps a distributed
 // cache for update, and then use a single writer to persist to the DB - with some clustering strategy
-type LazyWriterCache struct {
-	Config
-	cache  map[interface{}]CacheItem
+type LazyWriterCache[T Cacheable] struct {
+	Config[T]
+	cache  map[interface{}]T
 	dirty  map[interface{}]bool
 	mutex  sync.Mutex
 	locked atomic.Bool
@@ -89,13 +107,13 @@ type LazyWriterCache struct {
 }
 
 // NewLazyWriterCache creates a new cache and starts up its lazy db writer ticker.
-// Users need to pass a DB Find function and ensure their objects implement lazywritercache.CacheItem which has two functions,
+// Users need to pass a DB Find function and ensure their objects implement lazywritercache.Cacheable which has two functions,
 // one to return the Key() and the other to copy key variables into the cached item from the DB loaded item. (i.e. the number ID, update time etc.)
 // because the lazy write cannot just "Save" the item back to the DB as it might have been updated during the lazy write as its asynchronous.
-func NewLazyWriterCache(cfg Config) *LazyWriterCache {
-	cache := LazyWriterCache{
+func NewLazyWriterCache[T Cacheable](cfg Config[T]) *LazyWriterCache[T] {
+	cache := LazyWriterCache[T]{
 		Config: cfg,
-		cache:  make(map[interface{}]CacheItem),
+		cache:  make(map[interface{}]T),
 		dirty:  make(map[interface{}]bool),
 	}
 
@@ -111,7 +129,7 @@ func NewLazyWriterCache(cfg Config) *LazyWriterCache {
 }
 
 // Lock the cache. This will panic if the cache is already locked when the mutex is entered.
-func (c *LazyWriterCache) Lock() {
+func (c *LazyWriterCache[T]) Lock() {
 	c.mutex.Lock()
 	if !c.locked.CompareAndSwap(false, true) {
 		panic("LazyWriterCache likely subject to concurrent modification exception, locked in incorrect state")
@@ -119,7 +137,7 @@ func (c *LazyWriterCache) Lock() {
 }
 
 // GetAndRelease will lock and load an item from the cache and then release the lock.
-func (c *LazyWriterCache) GetAndRelease(key string) (CacheItem, bool) {
+func (c *LazyWriterCache[T]) GetAndRelease(key string) (T, bool) {
 	defer c.Release() // make sure we release the lock even if there is some kind of panic in the Get after the lock
 	item, ok := c.GetAndLock(key)
 	return item, ok
@@ -127,7 +145,7 @@ func (c *LazyWriterCache) GetAndRelease(key string) (CacheItem, bool) {
 
 // GetAndLock will lock and load an item from the cache.  It does not release the lock so always call Release after calling GetAndLock, even if nothing is found
 // Useful if you are checking to see if something is there and then planning to update it.
-func (c *LazyWriterCache) GetAndLock(key string) (CacheItem, bool) {
+func (c *LazyWriterCache[T]) GetAndLock(key string) (T, bool) {
 	c.Lock()
 	item, ok := c.cache[key]
 	if !ok {
@@ -146,7 +164,7 @@ func (c *LazyWriterCache) GetAndLock(key string) (CacheItem, bool) {
 }
 
 // Save will ensure the cache is locked via GetAndLock before Save and then released using Release
-func (c *LazyWriterCache) Save(item CacheItem) {
+func (c *LazyWriterCache[T]) Save(item T) {
 	if !c.locked.Load() {
 		panic("Call to Save to LazyWriterCache without locked cache")
 	}
@@ -157,7 +175,7 @@ func (c *LazyWriterCache) Save(item CacheItem) {
 }
 
 // Release the Lock.  It will panic if not already locked
-func (c *LazyWriterCache) Release() {
+func (c *LazyWriterCache[T]) Release() {
 	if !c.locked.CompareAndSwap(true, false) {
 		panic("LazyWriterCache likely subject to concurrent modification exception, locked in incorrect state")
 	}
@@ -167,7 +185,7 @@ func (c *LazyWriterCache) Release() {
 // Get a copy of the dirty records in the cache and clear the dirty record list
 // The cache is locked during the copy operations
 // The cache objects to be written are copied to the returned list, not their pointers
-func (c *LazyWriterCache) getDirtyRecords() (dirty []CacheItem) {
+func (c *LazyWriterCache[T]) getDirtyRecords() (dirty []Cacheable) {
 	c.Lock()
 	defer c.Release()
 	for k := range c.dirty {
@@ -178,7 +196,7 @@ func (c *LazyWriterCache) getDirtyRecords() (dirty []CacheItem) {
 }
 
 // Go routine to Save the dirty records to the DB, this is the lazy writer
-func (c *LazyWriterCache) saveDirtyToDB() {
+func (c *LazyWriterCache[T]) saveDirtyToDB() {
 	dirty := c.getDirtyRecords()
 	if len(dirty) == 0 {
 		return
@@ -211,7 +229,7 @@ func (c *LazyWriterCache) saveDirtyToDB() {
 			}
 
 			// and Save
-			err = c.handler.Save(item, tx)
+			err = c.handler.Save(item.(T), tx)
 			c.DirtyWrites.Add(1)
 
 			if err != nil {
@@ -227,7 +245,7 @@ func (c *LazyWriterCache) saveDirtyToDB() {
 				rCopy, ok := c.cache[item.Key()]
 				if ok {
 					// Re-save the item
-					c.cache[item.Key()] = rCopy.CopyKeyDataFrom(item)
+					c.cache[item.Key()] = rCopy.CopyKeyDataFrom(item).(T)
 				} else {
 					c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()))
 				}
@@ -247,7 +265,7 @@ func (c *LazyWriterCache) saveDirtyToDB() {
 // ClearDirty forcefully empties the dirty queue, for example if the cache has just been forcefully loaded from the db, and
 // you want to avoid the overhead of retrying to write it all, then ClearDirty may be useful.
 // ClearDirty will fail if the cache is not locked
-func (c *LazyWriterCache) ClearDirty() {
+func (c *LazyWriterCache[T]) ClearDirty() {
 	if !c.locked.Load() {
 		panic("Cache is not locked, cannot ClearDirty")
 	}
@@ -255,14 +273,14 @@ func (c *LazyWriterCache) ClearDirty() {
 }
 
 // Go routine to evict the cache every few seconds to keep it trimmed to the desired size - or there abouts
-func (c *LazyWriterCache) evictionManager() {
+func (c *LazyWriterCache[T]) evictionManager() {
 	for {
 		c.evictionProcessor()
 		time.Sleep(c.PurgeFreq) // every 10 seconds seems reasonable
 	}
 }
 
-func (c *LazyWriterCache) evictionProcessor() {
+func (c *LazyWriterCache[T]) evictionProcessor() {
 	for len(c.cache) > c.Limit {
 		func() {
 			c.Lock()
@@ -275,7 +293,7 @@ func (c *LazyWriterCache) evictionProcessor() {
 	}
 }
 
-func (c *LazyWriterCache) lazyWriter() {
+func (c *LazyWriterCache[T]) lazyWriter() {
 	for {
 		time.Sleep(c.WriteFreq)
 		c.saveDirtyToDB()
@@ -283,6 +301,6 @@ func (c *LazyWriterCache) lazyWriter() {
 
 }
 
-func (c *LazyWriterCache) Flush() {
+func (c *LazyWriterCache[T]) Flush() {
 	c.saveDirtyToDB()
 }

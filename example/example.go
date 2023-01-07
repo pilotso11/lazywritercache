@@ -1,9 +1,31 @@
+// MIT License
+//
+// # Copyright (c) 2023 Seth Osher
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 package main
 
 import (
 	"flag"
 	"math/rand"
-	"time"
+
+	"gorm.io/driver/sqlite"
 
 	"github.com/pilotso11/lazywritercache"
 	"github.com/xo/dburl"
@@ -15,7 +37,8 @@ import (
 func main() {
 	// Command line
 	// -db URL
-	dbUrl := flag.String("db", "postgres://postgres:postgres@localhost:5438/test", "Database URL")
+	dbUrl := flag.String("db", "sqlite:test.db", "Database URL")
+	//dbUrl := flag.String("db", "postgres://postgres:postgres@localhost:5438/test", "Database URL")
 	help := flag.Bool("h", false, "Print this help")
 	flag.Parse()
 
@@ -33,7 +56,14 @@ func main() {
 	if err != nil {
 		logger.Fatalf("%v", err)
 	}
-	db, err := gorm.Open(postgres.Open(dsn.DSN), &gorm.Config{})
+
+	var db *gorm.DB
+	switch dsn.Driver {
+	case "postgres":
+		db, err = gorm.Open(postgres.Open(dsn.DSN), &gorm.Config{})
+	case "sqlite3":
+		db, err = gorm.Open(sqlite.Open(dsn.DSN), &gorm.Config{})
+	}
 	if err != nil {
 		logger.Fatalf("%v", err)
 	}
@@ -43,17 +73,15 @@ func main() {
 	}
 
 	// Create the cache
-	gormRW := lazywritercache.NewGormCacheReaderWriter(db, zap.L(), "name", NewEmptyPerson, SaverHelper, FinderHelper)
-	cacheConfig := lazywritercache.NewDefaultConfig(gormRW)
-	cacheConfig.Limit = 8000
-	cacheConfig.PurgeFreq = 1 * time.Second // let's get some purges going
-	cache := lazywritercache.NewLazyWriterCache(cacheConfig)
-	//defer cache.Flush()
+	gormRW := lazywritercache.NewGormCacheReaderWriter[Person](db, zap.L(), "name", NewEmptyPerson)
+	cacheConfig := lazywritercache.NewDefaultConfig[Person](gormRW)
+	cache := lazywritercache.NewLazyWriterCache[Person](cacheConfig)
+	defer cache.Flush()
 
 	// Do some work
 	for i := 1; i < 10000; i++ {
 		name := GetRandomName()
-		DoWork(cache, name)
+		doWork(cache, name)
 	}
 
 	logger.Info("Work done, flushing the cache")
@@ -63,29 +91,20 @@ func main() {
 	logger.Info(cache.CacheStats.String())
 }
 
-func DoWork(cache *lazywritercache.LazyWriterCache, name string) {
+// This is not a great example as it has rather high read/write ratio, but its good enough
+// to illustrate the api
+func doWork(cache *lazywritercache.LazyWriterCache[Person], name string) {
 	record, ok := cache.GetAndLock(name)
 	defer cache.Release()
 	if !ok || rand.Float64() < 0.025 { // new or 2.5% random chance of update
 		person := Person{Name: name, City: GetRandomCity()}
 		cache.Save(person)
 	} else {
-		person := record.(Person)
 		if rand.Float64() < 0.0001 { // Print out a few random names we found
-			zap.S().Info("Found: " + person.Name)
+			zap.S().Info("Found: " + record.Name)
 		}
 	}
 
-}
-
-func SaverHelper(tx *gorm.DB, item lazywritercache.CacheItem) *gorm.DB {
-	person := item.(Person)
-	return tx.Save(&person)
-}
-
-func FinderHelper(tx *gorm.DB, item lazywritercache.CacheItem) *gorm.DB {
-	person := item.(Person)
-	return tx.Limit(1).Find(&person, "name=?", person.Name)
 }
 
 type Person struct {
@@ -98,7 +117,7 @@ func (p Person) Key() interface{} {
 	return p.Name
 }
 
-func (p Person) CopyKeyDataFrom(from lazywritercache.CacheItem) lazywritercache.CacheItem {
+func (p Person) CopyKeyDataFrom(from lazywritercache.Cacheable) lazywritercache.Cacheable {
 	fromData := from.(Person)
 
 	p.ID = fromData.ID
@@ -109,7 +128,7 @@ func (p Person) CopyKeyDataFrom(from lazywritercache.CacheItem) lazywritercache.
 	return p
 }
 
-func NewEmptyPerson(key interface{}) lazywritercache.CacheItem {
+func NewEmptyPerson(key interface{}) Person {
 	return Person{
 		Name: key.(string),
 	}
