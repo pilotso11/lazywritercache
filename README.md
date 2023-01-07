@@ -20,8 +20,7 @@ The lazywritercache packe has no dependencies outside of core go packages.   The
 # Why not just use REDIS?
 Good question.  In fact, if you need to live in a distributed world then REDIS is probably a good solution. But it's still much 
 slower than an in memory map.  You've got to make hops to a server etc.   This in memory cache is 
-much faster even than REDIS - roughly 100x.  The benchmark tests included put cache writes at roughly
-250ns/op with just 1 allocation, and reads at 50ns/op with 0 allocations.   A network based solution will have times measured
+much faster even than REDIS - roughly 100x.  The benchmark results below (and in the tests) show performance nearly as good as an in memory map.  Keep in mind that the lazy writer db time is still a practical limit on how fast you can update the cache.   A network based solution will have times measured
 in 10's of microseconds at best.   A database write is another 2 orders of magnitude slower. 
 
 If you are really sensitive about nonblocking performance then
