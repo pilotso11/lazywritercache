@@ -296,3 +296,48 @@ func TestCacheStats_JSON(t *testing.T) {
 	assert.Truef(t, ok, "found in map")
 	assert.Equal(t, int64(0), hits)
 }
+
+func TestRange(t *testing.T) {
+	item := testItem{id: "test1"}
+	item2 := testItem{id: "test2"}
+	item3 := testItem{id: "test3"}
+	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+
+	cache.Lock()
+	cache.Save(item)
+	cache.Save(item2)
+	cache.Save(item3)
+	cache.Release()
+
+	n := 0
+	cache.Range(func(k any, v testItem) bool {
+		n++
+		return true
+	})
+
+	assert.Equal(t, 3, n, "iterated over all cache items")
+}
+
+func TestRangeAbort(t *testing.T) {
+	item := testItem{id: "test1"}
+	item2 := testItem{id: "test2"}
+	item3 := testItem{id: "test3"}
+	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+
+	cache.Lock()
+	cache.Save(item)
+	cache.Save(item2)
+	cache.Save(item3)
+	cache.Release()
+
+	n := 0
+	cache.Range(func(k any, v testItem) bool {
+		n++
+		if n == 2 {
+			return false
+		}
+		return true
+	})
+
+	assert.Equal(t, 2, n, "iterated over all cache items")
+}
