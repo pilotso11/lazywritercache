@@ -34,9 +34,9 @@ type NoOpReaderWriter[T Cacheable] struct {
 }
 
 // Check interface is complete
-var _ CacheReaderWriter[EmptyCacheable] = (*NoOpReaderWriter[EmptyCacheable])(nil)
+var _ CacheReaderWriter[string, EmptyCacheable] = (*NoOpReaderWriter[EmptyCacheable])(nil)
 
-func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key interface{}) T, forcePanics ...bool) NoOpReaderWriter[T] {
+func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key any) T, forcePanics ...bool) NoOpReaderWriter[T] {
 	doPanics := len(forcePanics) > 0 && forcePanics[0]
 	return NoOpReaderWriter[T]{
 		getTemplateItem: itemTemplate,
@@ -45,7 +45,7 @@ func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key interface{}) T, forc
 	}
 }
 
-func (g NoOpReaderWriter[T]) Find(key interface{}, _ interface{}) (T, error) {
+func (g NoOpReaderWriter[T]) Find(key string, _ interface{}) (T, error) {
 	template := g.getTemplateItem(key)
 	if g.panicOnLoad {
 		panic("test panic, read")
