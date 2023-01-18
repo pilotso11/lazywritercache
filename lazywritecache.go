@@ -30,7 +30,7 @@ import (
 )
 
 type Cacheable interface {
-	Key() interface{}
+	Key() any
 	CopyKeyDataFrom(from Cacheable) Cacheable // This should copy in DB only ID fields.  If gorm.Model is implement this is ID, creationTime, updateTime, deleteTime
 }
 
@@ -38,7 +38,7 @@ type Cacheable interface {
 type EmptyCacheable struct {
 }
 
-func (i EmptyCacheable) Key() interface{} {
+func (i EmptyCacheable) Key() any {
 	return ""
 }
 
@@ -47,10 +47,10 @@ func (i EmptyCacheable) CopyKeyDataFrom(from Cacheable) Cacheable {
 }
 
 type CacheReaderWriter[T Cacheable] interface {
-	Find(key interface{}, tx interface{}) (T, error)
-	Save(item T, tx interface{}) error
-	BeginTx() (tx interface{}, err error)
-	CommitTx(tx interface{})
+	Find(key any, tx any) (T, error)
+	Save(item T, tx any) error
+	BeginTx() (tx any, err error)
+	CommitTx(tx any)
 	Info(msg string)
 	Warn(msg string)
 }
@@ -98,11 +98,11 @@ func (s *CacheStats) JSON() string {
 // cache for update, and then use a single writer to persist to the DB - with some clustering strategy
 type LazyWriterCache[T Cacheable] struct {
 	Config[T]
-	cache  map[interface{}]T
-	dirty  map[interface{}]bool
+	cache  map[any]T
+	dirty  map[any]bool
 	mutex  sync.Mutex
 	locked atomic.Bool
-	fifo   []interface{}
+	fifo   []any
 	CacheStats
 }
 
@@ -113,8 +113,8 @@ type LazyWriterCache[T Cacheable] struct {
 func NewLazyWriterCache[T Cacheable](cfg Config[T]) *LazyWriterCache[T] {
 	cache := LazyWriterCache[T]{
 		Config: cfg,
-		cache:  make(map[interface{}]T),
-		dirty:  make(map[interface{}]bool),
+		cache:  make(map[any]T),
+		dirty:  make(map[any]bool),
 	}
 
 	if cache.WriteFreq > 0 { // start lazyWriter, use write freq zero for testing
@@ -137,7 +137,7 @@ func (c *LazyWriterCache[T]) Lock() {
 }
 
 // GetAndRelease will lock and load an item from the cache and then release the lock.
-func (c *LazyWriterCache[T]) GetAndRelease(key string) (T, bool) {
+func (c *LazyWriterCache[T]) GetAndRelease(key any) (T, bool) {
 	defer c.Release() // make sure we release the lock even if there is some kind of panic in the Get after the lock
 	item, ok := c.GetAndLock(key)
 	return item, ok
@@ -145,7 +145,7 @@ func (c *LazyWriterCache[T]) GetAndRelease(key string) (T, bool) {
 
 // GetAndLock will lock and load an item from the cache.  It does not release the lock so always call Release after calling GetAndLock, even if nothing is found
 // Useful if you are checking to see if something is there and then planning to update it.
-func (c *LazyWriterCache[T]) GetAndLock(key string) (T, bool) {
+func (c *LazyWriterCache[T]) GetAndLock(key any) (T, bool) {
 	c.Lock()
 	item, ok := c.cache[key]
 	if !ok {
@@ -163,7 +163,10 @@ func (c *LazyWriterCache[T]) GetAndLock(key string) (T, bool) {
 	return item, ok
 }
 
-// Save will ensure the cache is locked via GetAndLock before Save and then released using Release
+// Save updates an item in the cache.
+// The cache must already have been locked, if not we will panic.
+//
+// The expectation is GetAndLock has been called first, and a Release has been deferred.
 func (c *LazyWriterCache[T]) Save(item T) {
 	if !c.locked.Load() {
 		panic("Call to Save to LazyWriterCache without locked cache")
@@ -191,69 +194,81 @@ func (c *LazyWriterCache[T]) getDirtyRecords() (dirty []Cacheable) {
 	for k := range c.dirty {
 		dirty = append(dirty, c.cache[k])
 	}
-	c.dirty = make(map[interface{}]bool)
+	c.dirty = make(map[any]bool)
 	return dirty
 }
 
 // Go routine to Save the dirty records to the DB, this is the lazy writer
 func (c *LazyWriterCache[T]) saveDirtyToDB() {
+	// Get all the dirty records
+	// return without any locks if there is no work
 	dirty := c.getDirtyRecords()
 	if len(dirty) == 0 {
 		return
-	} // no work to do
+	}
 
 	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", len(dirty)))
 	success := 0
 	fail := 0
-	func() {
 
-		defer func() {
-			if r := recover(); r != nil {
-				c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r))
+	// Catch any panics
+	defer func() {
+		if r := recover(); r != nil {
+			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r))
+		}
+	}()
+
+	// We do the whole list of dirty writes
+	// as a single DB transaction.
+	// For most databases this is a smart choice performance wise
+	// even though it holds the lock on the DB side longer.
+	tx, err := c.handler.BeginTx()
+	if err != nil {
+		return
+	}
+	// Ensure the commit runs
+	defer c.handler.CommitTx(tx)
+
+	for _, item := range dirty {
+
+		// Load the item from the DB.
+		// If the item already exists in the DB make sure we merge any key data if needed.
+		// ORMs will need this if they are managing row ID keys.
+		old, err := c.handler.Find(item.Key(), tx)
+		if err == nil {
+			// Copy the key data in for the existing record into the new record, so we can save it
+			item = item.CopyKeyDataFrom(old)
+		}
+
+		// Save back the merged item
+		err = c.handler.Save(item.(T), tx)
+		c.DirtyWrites.Add(1)
+
+		if err != nil {
+			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err))
+			fail++
+			return // don't update cache
+		}
+
+		// Briefly lock the cache and update it with the merged data.
+		// As we have not held the lock during the DB update, there is a race condition where a
+		// new write to the cache in the middle of the update could be overridden by the results.
+		// To avoid this we call copy key data back on the saved cache item.  So we only update the
+		// cache with the merged key data, assuming the cache user has updated their own data
+		// as they desired.
+		func() {
+			c.Lock()
+			defer c.Release()
+			rCopy, ok := c.cache[item.Key()]
+			if ok {
+				// Re-save the item
+				c.cache[item.Key()] = rCopy.CopyKeyDataFrom(item).(T)
+			} else {
+				c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()))
 			}
 		}()
-
-		tx, err := c.handler.BeginTx()
-		if err != nil {
-			return
-		}
-		defer c.handler.CommitTx(tx)
-		for _, item := range dirty {
-			// Load it
-
-			// If the item already exists in the DB make sure we merge any key data if needed
-			old, err := c.handler.Find(item.Key(), tx)
-			if err == nil {
-				// Copy the key data in for the existing record into the new record, so we can save it
-				item = item.CopyKeyDataFrom(old)
-			}
-
-			// and Save
-			err = c.handler.Save(item.(T), tx)
-			c.DirtyWrites.Add(1)
-
-			if err != nil {
-				c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err))
-				fail++
-				return // don't update cache
-			}
-
-			func() {
-				// Update the cache with the new key data
-				c.Lock()
-				defer c.Release()
-				rCopy, ok := c.cache[item.Key()]
-				if ok {
-					// Re-save the item
-					c.cache[item.Key()] = rCopy.CopyKeyDataFrom(item).(T)
-				} else {
-					c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()))
-				}
-			}()
-			success++
-		}
-		return
-	}()
+		success++
+	}
 
 	if fail > 0 {
 		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success))
@@ -269,7 +284,7 @@ func (c *LazyWriterCache[T]) ClearDirty() {
 	if !c.locked.Load() {
 		panic("Cache is not locked, cannot ClearDirty")
 	}
-	c.dirty = make(map[interface{}]bool) // clear dirty list, these all came from the DB
+	c.dirty = make(map[any]bool) // clear dirty list, these all came from the DB
 }
 
 // Go routine to evict the cache every few seconds to keep it trimmed to the desired size - or there abouts
@@ -280,6 +295,7 @@ func (c *LazyWriterCache[T]) evictionManager() {
 	}
 }
 
+// process evictions if the cache is larger than desired
 func (c *LazyWriterCache[T]) evictionProcessor() {
 	for len(c.cache) > c.Limit {
 		func() {
@@ -293,6 +309,7 @@ func (c *LazyWriterCache[T]) evictionProcessor() {
 	}
 }
 
+// this is the lazy writer goroutine
 func (c *LazyWriterCache[T]) lazyWriter() {
 	for {
 		time.Sleep(c.WriteFreq)
@@ -301,6 +318,44 @@ func (c *LazyWriterCache[T]) lazyWriter() {
 
 }
 
+// Flush forces all dirty items to be written to the database.
+// Flush should be called before exiting the application otherwise dirty writes will be lost.
+// As the lazy writer is set up with a timer this should only need to be called at exit.
 func (c *LazyWriterCache[T]) Flush() {
 	c.saveDirtyToDB()
+}
+
+// get all the keys
+// hold a lock while extracting the keys but immediately release it
+func (c *LazyWriterCache[T]) getKeys() []any {
+	c.Lock()
+	defer c.Release()
+
+	var keys []any
+	for k := range c.cache {
+		keys = append(keys, k)
+	}
+
+	return keys
+}
+
+// Range over all the keys and maps.
+// To be efficient with the locks first the keys are extracted in a single lock operation.
+// Then for the callback each item is locked and copied out, then released before the callback
+// is called.
+// This will prevent an expensive operation in the range from blocking other actions to the cache.
+//
+// As with other Range functions return true to continue iterating or false to stop.
+func (c *LazyWriterCache[T]) Range(action func(k any, v T) bool) (n int) {
+	keys := c.getKeys()
+	for _, k := range keys {
+		v, ok := c.GetAndRelease(k)
+		if ok {
+			n++
+			if !action(k, v) {
+				return
+			}
+		}
+	}
+	return
 }
