@@ -40,7 +40,7 @@ Benchmark results for cache size of 20k items and 100k items.
 You need to be at least on go1.18 as we use generics.  If you've not tried out generics, now is great time to do it.
 
 ```shell
-go get gitub.com/pilotso11/lazywritercache
+go get github.com/pilotso11/lazywritercache
 ```
 
 You will need to provide 2 structures to the cache. 
@@ -51,13 +51,13 @@ It has functions to look up cache items, store cache items and manage transactio
 Any of these can be no-op operations if you don't need them.
 A GORM implementation is provided. 
 ```go
-import "gitub.com/pilotso11/lazywritercache"
+import "github.com/pilotso11/lazywritercache"
 
-type CacheReaderWriter[T] interface {
-	Find(key string, tx interface{}) (T, error)
-	Save(item T, tx interface{}) error
-	BeginTx() (tx interface{}, err error)
-	CommitTx(tx interface{})
+type CacheReaderWriter[K,T] interface {
+	Find(key K, tx any) (T, error)
+	Save(item T, tx any) error
+	BeginTx() (tx any, err error)
+	CommitTx(tx any)
 	Info(msg string)
 	Warn(msg string)
 }
@@ -67,7 +67,7 @@ Cacheable strucs must implement a function to return their key and a function to
 you won't know the key at save time (I'm assuming you have a secondary unique key that you are using to lookup the items).
 ```go
 type Cacheable interface {
-	Key() string
+	Key() any
 	CopyKeyDataFrom(from Cacheable) Cacheable // This should copy in DB only ID fields.  If gorm.Model is implement this is ID, creationTime, updateTime, deleteTime
 }
 ```
@@ -94,7 +94,7 @@ as sample that use GORM and postgres.
 Assuming you have a `CacheReaderWriter` implementation, and you've created your `Cacheable`, then creating your cache is 
 straightforward.
 ```go
-readerWriter := lazywritercache.NewGormCacheReaderWriter[Person](db, zap.L(), "name", NewEmptyPerson)
-cacheConfig := lazywritercache.NewDefaultConfig[Person](readerWriter)
-cache := lazywritercache.NewLazyWriterCache[Person](cacheConfig)
+readerWriter := lazywritercache.NewGormCacheReaderWriter[string, Person](db, zap.L(), "name", NewEmptyPerson)
+cacheConfig := lazywritercache.NewDefaultConfig[string, Person](readerWriter)
+cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
 ```
