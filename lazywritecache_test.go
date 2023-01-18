@@ -52,10 +52,10 @@ func newTestItem(key interface{}) testItem {
 	}
 }
 
-func newNoOpTestConfig(panics ...bool) Config[testItem] {
+func newNoOpTestConfig(panics ...bool) Config[string, testItem] {
 	doPanics := len(panics) > 0 && panics[0]
 	readerWriter := NewNoOpReaderWriter[testItem](newTestItem, doPanics)
-	return Config[testItem]{
+	return Config[string, testItem]{
 		handler:      readerWriter,
 		Limit:        1000,
 		LookupOnMiss: false,
@@ -66,7 +66,7 @@ func newNoOpTestConfig(panics ...bool) Config[testItem] {
 func TestCacheStoreLoad(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
-	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
 
 	cache.Lock()
 	cache.Save(item)
@@ -92,7 +92,7 @@ func TestCacheStoreLoad(t *testing.T) {
 func TestCacheDirtyList(t *testing.T) {
 	item := testItem{id: "test11"}
 	item2 := testItem{id: "test22"}
-	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
 	cache.Lock()
 	cache.Save(item)
 	cache.Save(item2)
@@ -301,7 +301,7 @@ func TestRange(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
-	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
 
 	cache.Lock()
 	cache.Save(item)
@@ -310,7 +310,7 @@ func TestRange(t *testing.T) {
 	cache.Release()
 
 	n := 0
-	cache.Range(func(k any, v testItem) bool {
+	cache.Range(func(k string, v testItem) bool {
 		n++
 		return true
 	})
@@ -322,7 +322,7 @@ func TestRangeAbort(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
-	cache := NewLazyWriterCache[testItem](newNoOpTestConfig())
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
 
 	cache.Lock()
 	cache.Save(item)
@@ -331,7 +331,7 @@ func TestRangeAbort(t *testing.T) {
 	cache.Release()
 
 	n := 0
-	cache.Range(func(k any, v testItem) bool {
+	cache.Range(func(k string, v testItem) bool {
 		n++
 		if n == 2 {
 			return false

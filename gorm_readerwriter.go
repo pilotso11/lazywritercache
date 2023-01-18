@@ -33,21 +33,21 @@ import (
 // It's been tested with Postgres and Mysql.   UseTransactions should be set to true unless you have a really good reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
-type GormCacheReaderWriter[T Cacheable] struct {
+type GormCacheReaderWriter[K comparable, T Cacheable] struct {
 	db                *gorm.DB
 	finderWhereClause string
-	getTemplateItem   func(key interface{}) T
+	getTemplateItem   func(key K) T
 	logger            *zap.Logger
 	UseTransactions   bool
 }
 
 // Check interface is complete
-var _ CacheReaderWriter[EmptyCacheable] = (*GormCacheReaderWriter[EmptyCacheable])(nil)
+var _ CacheReaderWriter[string, EmptyCacheable] = (*GormCacheReaderWriter[string, EmptyCacheable])(nil)
 
 // NewGormCacheReaderWriter creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item Cacheable to your type
-func NewGormCacheReaderWriter[T Cacheable](db *gorm.DB, logger *zap.Logger, keyField string,
-	itemTemplate func(key interface{}) T) GormCacheReaderWriter[T] {
-	return GormCacheReaderWriter[T]{
+func NewGormCacheReaderWriter[K comparable, T Cacheable](db *gorm.DB, logger *zap.Logger, keyField string,
+	itemTemplate func(key K) T) GormCacheReaderWriter[K, T] {
+	return GormCacheReaderWriter[K, T]{
 		db:                db,
 		logger:            logger,
 		finderWhereClause: keyField + " = ?",
@@ -56,7 +56,7 @@ func NewGormCacheReaderWriter[T Cacheable](db *gorm.DB, logger *zap.Logger, keyF
 	}
 }
 
-func (g GormCacheReaderWriter[T]) Find(key interface{}, tx interface{}) (T, error) {
+func (g GormCacheReaderWriter[K, T]) Find(key K, tx any) (T, error) {
 	var dbTx *gorm.DB
 	if tx == nil {
 		dbTx = g.db
@@ -77,14 +77,14 @@ func (g GormCacheReaderWriter[T]) Find(key interface{}, tx interface{}) (T, erro
 	return template, nil
 }
 
-func (g GormCacheReaderWriter[T]) Save(item T, tx interface{}) error {
+func (g GormCacheReaderWriter[K, T]) Save(item T, tx any) error {
 	dbTx := tx.(*gorm.DB)
 	// Generics to the rescue!?
 	res := dbTx.Save(&item)
 	return res.Error
 }
 
-func (g GormCacheReaderWriter[T]) BeginTx() (tx interface{}, err error) {
+func (g GormCacheReaderWriter[K, T]) BeginTx() (tx any, err error) {
 	if g.UseTransactions {
 		tx = g.db.Begin()
 		return tx, nil
@@ -92,7 +92,7 @@ func (g GormCacheReaderWriter[T]) BeginTx() (tx interface{}, err error) {
 	return g.db, nil
 }
 
-func (g GormCacheReaderWriter[T]) CommitTx(tx interface{}) {
+func (g GormCacheReaderWriter[K, T]) CommitTx(tx any) {
 	dbTx := tx.(*gorm.DB)
 	if g.UseTransactions {
 		dbTx.Commit()
@@ -100,10 +100,10 @@ func (g GormCacheReaderWriter[T]) CommitTx(tx interface{}) {
 	return
 }
 
-func (g GormCacheReaderWriter[T]) Info(msg string) {
+func (g GormCacheReaderWriter[K, T]) Info(msg string) {
 	g.logger.Info(msg)
 }
 
-func (g GormCacheReaderWriter[T]) Warn(msg string) {
+func (g GormCacheReaderWriter[K, T]) Warn(msg string) {
 	g.logger.Warn(msg)
 }

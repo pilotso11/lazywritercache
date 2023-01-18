@@ -25,8 +25,6 @@ import (
 	"flag"
 	"math/rand"
 
-	"gorm.io/driver/sqlite"
-
 	"github.com/pilotso11/lazywritercache"
 	"github.com/xo/dburl"
 	"go.uber.org/zap"
@@ -37,8 +35,8 @@ import (
 func main() {
 	// Command line
 	// -db URL
-	dbUrl := flag.String("db", "sqlite:test.db", "Database URL")
-	//dbUrl := flag.String("db", "postgres://postgres:postgres@localhost:5438/test", "Database URL")
+	//dbUrl := flag.String("db", "sqlite:test.db", "Database URL")
+	dbUrl := flag.String("db", "postgres://postgres:postgres@localhost:5438/test", "Database URL")
 	help := flag.Bool("h", false, "Print this help")
 	flag.Parse()
 
@@ -61,8 +59,8 @@ func main() {
 	switch dsn.Driver {
 	case "postgres":
 		db, err = gorm.Open(postgres.Open(dsn.DSN), &gorm.Config{})
-	case "sqlite3":
-		db, err = gorm.Open(sqlite.Open(dsn.DSN), &gorm.Config{})
+		/*case "sqlite3": // this cause cgo issues for some, especially on windows
+		db, err = gorm.Open(sqlite.Open(dsn.DSN), &gorm.Config{}) */
 	}
 	if err != nil {
 		logger.Fatalf("%v", err)
@@ -73,9 +71,9 @@ func main() {
 	}
 
 	// Create the cache
-	gormRW := lazywritercache.NewGormCacheReaderWriter[Person](db, zap.L(), "name", NewEmptyPerson)
-	cacheConfig := lazywritercache.NewDefaultConfig[Person](gormRW)
-	cache := lazywritercache.NewLazyWriterCache[Person](cacheConfig)
+	gormRW := lazywritercache.NewGormCacheReaderWriter[string, Person](db, zap.L(), "name", NewEmptyPerson)
+	cacheConfig := lazywritercache.NewDefaultConfig[string, Person](gormRW)
+	cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
 	defer cache.Flush()
 
 	// Do some work
@@ -93,7 +91,7 @@ func main() {
 
 // This is not a great example as it has rather high read/write ratio, but its good enough
 // to illustrate the api
-func doWork(cache *lazywritercache.LazyWriterCache[Person], name string) {
+func doWork(cache *lazywritercache.LazyWriterCache[string, Person], name string) {
 	record, ok := cache.GetAndLock(name)
 	defer cache.Release()
 	if !ok || rand.Float64() < 0.025 { // new or 2.5% random chance of update
@@ -128,8 +126,8 @@ func (p Person) CopyKeyDataFrom(from lazywritercache.Cacheable) lazywritercache.
 	return p
 }
 
-func NewEmptyPerson(key interface{}) Person {
+func NewEmptyPerson(key string) Person {
 	return Person{
-		Name: key.(string),
+		Name: key,
 	}
 }
