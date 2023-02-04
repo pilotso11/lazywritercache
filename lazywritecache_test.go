@@ -26,8 +26,10 @@ import (
 	"encoding/json"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/goleak"
 )
 
 type testItem struct {
@@ -340,4 +342,16 @@ func TestRangeAbort(t *testing.T) {
 	})
 
 	assert.Equal(t, 2, n, "iterated over all cache items")
+}
+
+func TestNoGoroutineLeaks(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cache.Lock()
+	cache.Save(testItem{id: "test"})
+	cache.Release()
+	time.Sleep(100 * time.Millisecond)
+	cache.Shutdown()
+	time.Sleep(2 * time.Second)
+
 }

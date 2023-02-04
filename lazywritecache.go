@@ -98,11 +98,12 @@ func (s *CacheStats) JSON() string {
 // cache for update, and then use a single writer to persist to the DB - with some clustering strategy
 type LazyWriterCache[K comparable, T Cacheable] struct {
 	Config[K, T]
-	cache  map[K]T
-	dirty  map[K]bool
-	mutex  sync.Mutex
-	locked atomic.Bool
-	fifo   []K
+	cache    map[K]T
+	dirty    map[K]bool
+	mutex    sync.Mutex
+	locked   atomic.Bool
+	fifo     []K
+	stopping bool
 	CacheStats
 }
 
@@ -121,7 +122,7 @@ func NewLazyWriterCache[K comparable, T Cacheable](cfg Config[K, T]) *LazyWriter
 		go cache.lazyWriter()
 	}
 
-	if cache.Limit > 0 && cache.PurgeFreq > 0 { // start eviction manager go routine
+	if cache.Limit > 0 && cache.PurgeFreq > 0 { // start eviction manager goroutine
 		go cache.evictionManager()
 	}
 
@@ -289,9 +290,17 @@ func (c *LazyWriterCache[K, T]) ClearDirty() {
 
 // Go routine to evict the cache every few seconds to keep it trimmed to the desired size - or there abouts
 func (c *LazyWriterCache[K, T]) evictionManager() {
+	cnt := time.Duration(0)
 	for {
-		c.evictionProcessor()
-		time.Sleep(c.PurgeFreq) // every 10 seconds seems reasonable
+		time.Sleep(time.Second) // every second we check for stop
+		cnt = cnt + time.Second
+		if c.stopping {
+			return
+		}
+		if cnt > c.PurgeFreq {
+			c.evictionProcessor()
+			cnt = 0
+		}
 	}
 }
 
@@ -314,6 +323,9 @@ func (c *LazyWriterCache[K, T]) lazyWriter() {
 	for {
 		time.Sleep(c.WriteFreq)
 		c.saveDirtyToDB()
+		if c.stopping {
+			return
+		}
 	}
 
 }
@@ -358,4 +370,10 @@ func (c *LazyWriterCache[K, T]) Range(action func(k K, v T) bool) (n int) {
 		}
 	}
 	return
+}
+
+// Shutdown signals to the cache it should stop any running goroutines.
+// This does not Flush the cache first, so it is recommended call Flush beforehand.
+func (c *LazyWriterCache[K, T]) Shutdown() {
+	c.stopping = true
 }
