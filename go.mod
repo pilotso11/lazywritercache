@@ -3,6 +3,7 @@ module github.com/pilotso11/lazywritercache
 go 1.18
 
 require (
+	github.com/puzpuzpuz/xsync v1.5.2
 	github.com/stretchr/testify v1.8.1
 	github.com/xo/dburl v0.13.0
 	go.uber.org/goleak v1.1.11

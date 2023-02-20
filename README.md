@@ -15,7 +15,10 @@ A lazy writer cache has the following properties:
 
 # Dependencies
 
-The lazywritercache packe has no dependencies outside of core go packages.   The dependencies in go.mod are for the GORM example in [/example](/example).
+The basic lazywritercache has no dependencies outside of core go packages.   The dependencies in go.mod are for the GORM example in [/example](/example).
+
+A second lock free implementation which performs slightly better under highly parallel read workloads is
+in the lockfree sub-folder as lockfree.LazyWriterCacheLF and has a dependence on xsync.MapOf.
 
 # Why not just use REDIS?
 Good question.  In fact, if you need to live in a distributed world then REDIS is probably a good solution. But it's still much 
@@ -26,13 +29,23 @@ in 10's of microseconds at best.   A database write is another 2 orders of magni
 If you are really sensitive about nonblocking performance then
 you could conceivably put a lazy write cache in front of redis with a fairly quick sync loop.
 
-Benchmark results for cache size of 20k items and 100k items.
-| Benchmark       | ns/op | b/op | allocs/op |
-|-----------------| -----:| ----:| ---------:|
-| CacheWrite 20k  |  390  | 137  |     3     |
-| CacheWrite 100k |  427  | 157  |     4     |
-| CacheRead 20k   |  52   |  0   |     0     |
-| CacheRead 100k  |  73   |  2   |     0     |
+Benchmark results for cache size of 20k items and 100k items on macbook apple silicon.
+
+| Benchmark                | ns/op | b/op | allocs/op |
+|--------------------------|------:|-----:|----------:|
+| CacheWrite 20k           |   167 |  147 |         3 |
+| CacheWrite 100k          |   168 |  146 |         4 |
+| CacheRead 20k            |    48 |    0 |         0 |
+| CacheRead 100k           |    54 |    1 |         0 |
+| CacheRead 100k 5 threads |   677 |    4 |         0 |
+
+| Benchmark Lock Free      | ns/op | b/op | allocs/op |
+|--------------------------|------:|-----:|----------:|
+| CacheWrite 20k           |   299 |  109 |         6 |
+| CacheWrite 100k          |   270 |  113 |         7 |
+| CacheRead 20k            |    39 |    0 |         0 |
+| CacheRead 100k           |    52 |    1 |         0 |
+| CacheRead 100k 5 threads |   637 |    4 |         0 |
 
 
 # How do I use it?

@@ -24,7 +24,9 @@ package lazywritercache
 
 import (
 	"encoding/json"
+	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -175,6 +177,50 @@ func BenchmarkCacheRead100k(b *testing.B) {
 	cacheRead(b, 100000)
 }
 
+func BenchmarkParallel_x5_CacheRead20k(b *testing.B) {
+	cacheSize := 20000
+	nThreads := 5
+
+	parallelRun(b, cacheSize, nThreads)
+}
+
+func BenchmarkParallel_x10_CacheRead20k(b *testing.B) {
+	cacheSize := 20000
+	nThreads := 10
+
+	parallelRun(b, cacheSize, nThreads)
+}
+
+func parallelRun(b *testing.B, cacheSize int, nThreads int) {
+	cache := NewLazyWriterCache(newNoOpTestConfig())
+	var keys []string
+	for i := 0; i < cacheSize; i++ {
+		id := strconv.Itoa(i % cacheSize)
+		keys = append(keys, id)
+		item := testItem{id: id}
+		cache.Lock()
+		cache.Save(item)
+		cache.Release()
+	}
+
+	wait := sync.WaitGroup{}
+	for i := 0; i < nThreads; i++ {
+		wait.Add(1)
+		go func() {
+			for i := 0; i < b.N; i++ {
+				key := rand.Intn(cacheSize)
+				_, ok := cache.GetAndLock(keys[key])
+				if ok {
+				}
+				cache.Release()
+			}
+			wait.Add(-1)
+		}()
+	}
+	wait.Wait()
+	b.ReportAllocs()
+}
+
 func cacheWrite(b *testing.B, cacheSize int) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
 	for i := 0; i < b.N; i++ {
@@ -202,7 +248,8 @@ func cacheRead(b *testing.B, cacheSize int) {
 
 	k := 0
 	for i := 0; i < b.N; i++ {
-		_, ok := cache.GetAndLock(keys[i%cacheSize])
+		key := rand.Intn(cacheSize)
+		_, ok := cache.GetAndLock(keys[key])
 		if ok {
 			k++
 		}
