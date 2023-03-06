@@ -244,8 +244,8 @@ func TestCacheEvictionLF(t *testing.T) {
 	assert.Truef(t, ok, "11 has not been evicted")
 	_, ok = cache.cache.Load("15")
 	assert.Truef(t, ok, "15 has not been evicted")
-	_, ok = cache.cache.Load("LF9")
-	assert.Truef(t, ok, "LF9 has not been evicted")
+	_, ok = cache.cache.Load("29")
+	assert.Truef(t, ok, "29 has not been evicted")
 
 }
 
