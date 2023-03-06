@@ -24,8 +24,8 @@ package lockfree
 
 import (
 	"errors"
+	"log"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -34,25 +34,20 @@ import (
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
 type GormCacheReaderWriteLF[T CacheableLF] struct {
-	db                *gorm.DB
-	finderWhereClause string
-	getTemplateItem   func(key string) T
-	logger            *zap.Logger
-	UseTransactions   bool
+	db              *gorm.DB
+	getTemplateItem func(key string) T
+	UseTransactions bool
 }
 
 // Check interface is complete
 var _ CacheReaderWriterLF[EmptyCacheableLF] = (*GormCacheReaderWriteLF[EmptyCacheableLF])(nil)
 
 // NewGormCacheReaderWriteLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
-func NewGormCacheReaderWriteLF[T CacheableLF](db *gorm.DB, logger *zap.Logger, keyField string,
-	itemTemplate func(key string) T) GormCacheReaderWriteLF[T] {
+func NewGormCacheReaderWriteLF[T CacheableLF](db *gorm.DB, itemTemplate func(key string) T) GormCacheReaderWriteLF[T] {
 	return GormCacheReaderWriteLF[T]{
-		db:                db,
-		logger:            logger,
-		finderWhereClause: keyField + " = ?",
-		getTemplateItem:   itemTemplate,
-		UseTransactions:   true,
+		db:              db,
+		getTemplateItem: itemTemplate,
+		UseTransactions: true,
 	}
 }
 
@@ -66,7 +61,7 @@ func (g GormCacheReaderWriteLF[T]) Find(key string, tx any) (T, error) {
 
 	template := g.getTemplateItem(key)
 
-	res := dbTx.Limit(1).Find(&template, g.finderWhereClause, key)
+	res := dbTx.Limit(1).Find(&template, &template)
 
 	if res.Error != nil {
 		return template, res.Error
@@ -101,9 +96,9 @@ func (g GormCacheReaderWriteLF[T]) CommitTx(tx any) {
 }
 
 func (g GormCacheReaderWriteLF[T]) Info(msg string) {
-	g.logger.Info(msg)
+	log.Println("[info] ", msg)
 }
 
 func (g GormCacheReaderWriteLF[T]) Warn(msg string) {
-	g.logger.Warn(msg)
+	log.Println("[warn] ", msg)
 }
