@@ -24,35 +24,40 @@ package lazywritercache
 
 import (
 	"errors"
+	"log"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // GormCacheReaderWriter is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
-// It's been tested with Postgres and Mysql.   UseTransactions should be set to true unless you have a really good reason not to.
+// It's been tested with Postgres and Mysql.
+//
+// UseTransactions should be set to true unless you have a really good reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
+//
+// If PreloadAssociations is true then calls to db.Find are implement as db.Preload(clause.Associations).Find which will cause
+// GORM to eagerly fetch any joined objects.
 type GormCacheReaderWriter[K comparable, T Cacheable] struct {
-	db                *gorm.DB
-	finderWhereClause string
-	getTemplateItem   func(key K) T
-	logger            *zap.Logger
-	UseTransactions   bool
+	db                  *gorm.DB
+	finderWhereClause   string
+	getTemplateItem     func(key K) T
+	UseTransactions     bool
+	PreloadAssociations bool
 }
 
 // Check interface is complete
 var _ CacheReaderWriter[string, EmptyCacheable] = (*GormCacheReaderWriter[string, EmptyCacheable])(nil)
 
-// NewGormCacheReaderWriter creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item Cacheable to your type
-func NewGormCacheReaderWriter[K comparable, T Cacheable](db *gorm.DB, logger *zap.Logger, keyField string,
-	itemTemplate func(key K) T) GormCacheReaderWriter[K, T] {
+// NewGormCacheReaderWriter creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item Cacheable to your type.
+// THe itemTemplate function is used to create new items with only the key, which are then used by db.Find() to find your item by key.
+func NewGormCacheReaderWriter[K comparable, T Cacheable](db *gorm.DB, itemTemplate func(key K) T) GormCacheReaderWriter[K, T] {
 	return GormCacheReaderWriter[K, T]{
-		db:                db,
-		logger:            logger,
-		finderWhereClause: keyField + " = ?",
-		getTemplateItem:   itemTemplate,
-		UseTransactions:   true,
+		db:                  db,
+		getTemplateItem:     itemTemplate,
+		UseTransactions:     true,
+		PreloadAssociations: true,
 	}
 }
 
@@ -66,7 +71,12 @@ func (g GormCacheReaderWriter[K, T]) Find(key K, tx any) (T, error) {
 
 	template := g.getTemplateItem(key)
 
-	res := dbTx.Limit(1).Find(&template, g.finderWhereClause, key)
+	var res *gorm.DB
+	if g.PreloadAssociations {
+		res = dbTx.Limit(1).Preload(clause.Associations).Find(&template, &template)
+	} else {
+		res = dbTx.Limit(1).Find(&template, &template)
+	}
 
 	if res.Error != nil {
 		return template, res.Error
@@ -101,9 +111,9 @@ func (g GormCacheReaderWriter[K, T]) CommitTx(tx any) {
 }
 
 func (g GormCacheReaderWriter[K, T]) Info(msg string) {
-	g.logger.Info(msg)
+	log.Println("[info] ", msg)
 }
 
 func (g GormCacheReaderWriter[K, T]) Warn(msg string) {
-	g.logger.Warn(msg)
+	log.Println("[warn] ", msg)
 }

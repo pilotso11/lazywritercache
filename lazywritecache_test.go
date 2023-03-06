@@ -115,6 +115,21 @@ func TestCacheDirtyList(t *testing.T) {
 	assert.Contains(t, d, item2)
 }
 
+func TestInvalidate(t *testing.T) {
+	item := testItem{id: "test11"}
+	item2 := testItem{id: "test22"}
+	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cache.Lock()
+	cache.Save(item)
+	cache.Save(item2)
+	cache.Release()
+	assert.Len(t, cache.dirty, 2, "dirty records")
+
+	cache.Invalidate()
+	assert.Len(t, cache.dirty, 0, "dirty records")
+	assert.Len(t, cache.cache, 0, "cache is empty")
+}
+
 func TestCacheLockUnlockNoPanics(t *testing.T) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
 

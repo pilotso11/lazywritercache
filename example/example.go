@@ -23,11 +23,11 @@ package main
 
 import (
 	"flag"
+	"log"
 	"math/rand"
 
 	"github.com/pilotso11/lazywritercache"
 	"github.com/xo/dburl"
-	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -35,16 +35,12 @@ import (
 func main() {
 	// Command line
 	// -db URL
-	//dbUrl := flag.String("db", "sqlite:test.db", "Database URL")
+	// dbUrl := flag.String("db", "sqlite:test.db", "Database URL")
 	dbUrl := flag.String("db", "postgres://postgres:postgres@localhost:5438/test", "Database URL")
 	help := flag.Bool("h", false, "Print this help")
 	flag.Parse()
 
 	// Setup logger
-	root, _ := zap.NewDevelopment()
-	zap.ReplaceGlobals(root)
-	logger := zap.S()
-
 	// Setup database
 	if *help {
 		flag.PrintDefaults()
@@ -52,7 +48,7 @@ func main() {
 	}
 	dsn, err := dburl.Parse(*dbUrl)
 	if err != nil {
-		logger.Fatalf("%v", err)
+		log.Fatalf("%v", err)
 	}
 
 	var db *gorm.DB
@@ -63,15 +59,15 @@ func main() {
 		db, err = gorm.Open(sqlite.Open(dsn.DSN), &gorm.Config{}) */
 	}
 	if err != nil {
-		logger.Fatalf("%v", err)
+		log.Fatalf("%v", err)
 	}
 	err = db.AutoMigrate(&Person{})
 	if err != nil {
-		logger.Fatalf("%v", err)
+		log.Fatalf("%v", err)
 	}
 
 	// Create the cache
-	gormRW := lazywritercache.NewGormCacheReaderWriter[string, Person](db, zap.L(), "name", NewEmptyPerson)
+	gormRW := lazywritercache.NewGormCacheReaderWriter[string, Person](db, NewEmptyPerson)
 	cacheConfig := lazywritercache.NewDefaultConfig[string, Person](gormRW)
 	cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
 	defer cache.Flush()
@@ -82,11 +78,11 @@ func main() {
 		doWork(cache, name)
 	}
 
-	logger.Info("Work done, flushing the cache")
+	log.Println("Work done, flushing the cache")
 	cache.Flush()
 
-	logger.Info(cache.CacheStats.JSON())
-	logger.Info(cache.CacheStats.String())
+	log.Println(cache.CacheStats.JSON())
+	log.Println(cache.CacheStats.String())
 }
 
 // This is not a great example as it has rather high read/write ratio, but its good enough
@@ -99,7 +95,7 @@ func doWork(cache *lazywritercache.LazyWriterCache[string, Person], name string)
 		cache.Save(person)
 	} else {
 		if rand.Float64() < 0.0001 { // Print out a few random names we found
-			zap.S().Info("Found: " + record.Name)
+			log.Println("Found: " + record.Name)
 		}
 	}
 

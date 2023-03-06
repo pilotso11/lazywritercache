@@ -103,7 +103,7 @@ type LazyWriterCache[K comparable, T Cacheable] struct {
 	mutex    sync.Mutex
 	locked   atomic.Bool
 	fifo     []K
-	stopping bool
+	stopping atomic.Bool
 	CacheStats
 }
 
@@ -294,7 +294,7 @@ func (c *LazyWriterCache[K, T]) evictionManager() {
 	for {
 		time.Sleep(time.Second) // every second we check for stop
 		cnt = cnt + time.Second
-		if c.stopping {
+		if c.stopping.Load() {
 			return
 		}
 		if cnt > c.PurgeFreq {
@@ -323,7 +323,7 @@ func (c *LazyWriterCache[K, T]) lazyWriter() {
 	for {
 		time.Sleep(c.WriteFreq)
 		c.saveDirtyToDB()
-		if c.stopping {
+		if c.stopping.Load() {
 			return
 		}
 	}
@@ -371,5 +371,14 @@ func (c *LazyWriterCache[K, T]) Range(action func(k K, v T) bool) (n int) {
 // Shutdown signals to the cache it should stop any running goroutines.
 // This does not Flush the cache first, so it is recommended call Flush beforehand.
 func (c *LazyWriterCache[K, T]) Shutdown() {
-	c.stopping = true
+	c.stopping.Store(true)
+}
+
+// Invalidate flushes and empties the cache forcing reloads
+func (c *LazyWriterCache[K, T]) Invalidate() {
+	c.Flush()
+	c.Lock()
+	defer c.Release()
+	c.cache = make(map[K]T)
+	c.fifo = make([]K, 0)
 }

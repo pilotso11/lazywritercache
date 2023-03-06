@@ -107,7 +107,7 @@ as sample that use GORM and postgres.
 Assuming you have a `CacheReaderWriter` implementation, and you've created your `Cacheable`, then creating your cache is 
 straightforward.
 ```go
-readerWriter := lazywritercache.NewGormCacheReaderWriter[string, Person](db, zap.L(), "name", NewEmptyPerson)
+readerWriter := lazywritercache.NewGormCacheReaderWriter[string, Person](db, NewEmptyPerson)
 cacheConfig := lazywritercache.NewDefaultConfig[string, Person](readerWriter)
 cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
 ```
