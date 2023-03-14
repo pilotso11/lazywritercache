@@ -306,7 +306,13 @@ func (c *LazyWriterCache[K, T]) evictionManager() {
 
 // process evictions if the cache is larger than desired
 func (c *LazyWriterCache[K, T]) evictionProcessor() {
-	for len(c.cache) > c.Limit {
+	for {
+		c.Lock()
+		cLen := len(c.cache)
+		c.Release()
+		if cLen <= c.Limit {
+			return
+		}
 		func() {
 			c.Lock()
 			defer c.Release()
