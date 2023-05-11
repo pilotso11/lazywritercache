@@ -140,14 +140,22 @@ func (c *LazyWriterCache[K, T]) Lock() {
 // GetAndRelease will lock and load an item from the cache and then release the lock.
 func (c *LazyWriterCache[K, T]) GetAndRelease(key K) (T, bool) {
 	defer c.Release() // make sure we release the lock even if there is some kind of panic in the Get after the lock
-	item, ok := c.GetAndLock(key)
-	return item, ok
+	return c.GetAndLock(key)
 }
 
 // GetAndLock will lock and load an item from the cache.  It does not release the lock so always call Release after calling GetAndLock, even if nothing is found
 // Useful if you are checking to see if something is there and then planning to update it.
 func (c *LazyWriterCache[K, T]) GetAndLock(key K) (T, bool) {
 	c.Lock()
+	return c.GetFromLocked(key)
+}
+
+// GetFromLocked will  load an item from a previously locked cache.
+func (c *LazyWriterCache[K, T]) GetFromLocked(key K) (T, bool) {
+	if !c.locked.Load() {
+		panic("Call to GetFromLocked to LazyWriterCache without locked cache")
+	}
+
 	item, ok := c.cache[key]
 	if !ok {
 		c.Misses.Add(1)

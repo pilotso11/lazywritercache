@@ -417,3 +417,10 @@ func TestNoGoroutineLeaks(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 }
+
+func TestGetFromLockedPanicIfNotLocked(t *testing.T) {
+	assert.Panics(t, func() {
+		cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+		cache.GetFromLocked("test")
+	})
+}
