@@ -8,7 +8,7 @@ require (
 	github.com/xo/dburl v0.13.0
 	go.uber.org/goleak v1.1.11
 	gorm.io/driver/postgres v1.4.6
-	gorm.io/gorm v1.24.3
+	gorm.io/gorm v1.25.2
 )
 
 require (
