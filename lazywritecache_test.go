@@ -289,6 +289,9 @@ func TestCacheEviction(t *testing.T) {
 	}
 	assert.Len(t, cache.cache, 30)
 	cache.evictionProcessor()
+	assert.Len(t, cache.cache, 30, "nothing evicted until flushed")
+	cache.Flush()
+	cache.evictionProcessor()
 	assert.Len(t, cache.cache, 20)
 	_, ok := cache.cache["0"]
 	assert.Falsef(t, ok, "0 has been evicted")

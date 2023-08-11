@@ -29,6 +29,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// Logger is an interface that can be implemented to provide logging for the cache.
+// The default logger is log.Println
+type LoggerLF interface {
+	Info(msg string, action string, item ...CacheableLF)
+	Warn(msg string, action string, item ...CacheableLF)
+	Error(msg string, action string, item ...CacheableLF)
+}
+
 // GormCacheReaderWriteLF is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
 // It's been tested with Postgres and Mysql.   UseTransactions should be set to true unless you have a really good reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
@@ -37,6 +45,7 @@ type GormCacheReaderWriteLF[T CacheableLF] struct {
 	db              *gorm.DB
 	getTemplateItem func(key string) T
 	UseTransactions bool
+	Logger          LoggerLF
 }
 
 // Check interface is complete
@@ -95,10 +104,26 @@ func (g GormCacheReaderWriteLF[T]) CommitTx(tx any) {
 	return
 }
 
-func (g GormCacheReaderWriteLF[T]) Info(msg string) {
-	log.Println("[info] ", msg)
+func (g GormCacheReaderWriteLF[T]) Info(msg string, action string, item ...T) {
+	if g.Logger != nil {
+		if len(item) > 0 {
+			g.Logger.Info(msg, action, item[0])
+		} else {
+			g.Logger.Info(msg, action)
+		}
+	} else {
+		log.Println("[info] ", msg)
+	}
 }
 
-func (g GormCacheReaderWriteLF[T]) Warn(msg string) {
-	log.Println("[warn] ", msg)
+func (g GormCacheReaderWriteLF[T]) Warn(msg string, action string, item ...T) {
+	if g.Logger != nil {
+		if len(item) > 0 {
+			g.Logger.Warn(msg, action, item[0])
+		} else {
+			g.Logger.Warn(msg, action)
+		}
+	} else {
+		log.Println("[warn] ", msg)
+	}
 }

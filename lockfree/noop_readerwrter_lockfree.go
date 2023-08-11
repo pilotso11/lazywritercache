@@ -69,10 +69,10 @@ func (g NoOpReaderWriterLF[T]) CommitTx(_ interface{}) {
 	return
 }
 
-func (g NoOpReaderWriterLF[T]) Info(msg string) {
+func (g NoOpReaderWriterLF[T]) Info(msg string, _ string, _ ...T) {
 	log.Print("[info] ", msg)
 }
 
-func (g NoOpReaderWriterLF[T]) Warn(msg string) {
+func (g NoOpReaderWriterLF[T]) Warn(msg string, _ string, _ ...T) {
 	log.Print("[warn] ", msg)
 }

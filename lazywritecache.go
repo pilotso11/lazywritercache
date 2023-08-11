@@ -340,14 +340,21 @@ func (c *LazyWriterCache[K, T]) evictionProcessor() {
 		if cLen <= c.Limit {
 			return
 		}
-		func() {
+		if func() bool {
 			c.Lock()
 			defer c.Release()
 			toRemove := c.fifo[0]
+			if c.dirty[toRemove] {
+				c.handler.Warn("Dirty items at the top of the purge queue, skipping eviction", "eviction")
+				return true
+			}
 			c.fifo = c.fifo[1:] // pop item
 			delete(c.cache, toRemove)
 			c.Evictions.Add(1)
-		}()
+			return false
+		}() {
+			return
+		}
 	}
 }
 

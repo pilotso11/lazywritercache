@@ -55,8 +55,8 @@ type CacheReaderWriterLF[T CacheableLF] interface {
 	Save(item T, tx any) error
 	BeginTx() (tx any, err error)
 	CommitTx(tx any)
-	Info(msg string)
-	Warn(msg string)
+	Info(msg string, action string, item ...T)
+	Warn(msg string, action string, item ...T)
 }
 
 type ConfigLF[T CacheableLF] struct {
@@ -153,14 +153,14 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		return
 	}
 
-	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", c.dirty.Size()))
+	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", c.dirty.Size()), "write-dirty")
 	success := 0
 	fail := 0
 
 	// Catch any panics
 	defer func() {
 		if r := recover(); r != nil {
-			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r))
+			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r), "write-dirty")
 		}
 	}()
 
@@ -195,7 +195,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		c.DirtyWrites.Add(1)
 
 		if err != nil {
-			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err))
+			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err), "write-dirty", item)
 			fail++
 			return true // don't update cache, move to next item
 		}
@@ -212,7 +212,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 				// Re-save the item
 				c.cache.Store(item.Key(), rCopy.CopyKeyDataFrom(item).(T))
 			} else {
-				c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()))
+				c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()), "write-dirty", item)
 			}
 		}()
 		success++
@@ -220,9 +220,9 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 	})
 
 	if fail > 0 {
-		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success))
+		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "write-dirty")
 	} else {
-		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success))
+		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "write-dirty")
 	}
 }
 
@@ -252,11 +252,23 @@ func (c *LazyWriterCacheLF[T]) evictionManager() {
 // process evictions if the cache is larger than desired
 func (c *LazyWriterCacheLF[T]) evictionProcessor() {
 	for c.cache.Size() > c.Limit {
-		func() {
+		if func() bool {
 			toRemove := c.fifo.Dequeue()
+			dirty, ok := c.dirty.Load(toRemove)
+			if ok && dirty {
+				// This is a dirty item, we can't evict it, so we put it back on the queue
+				item, _ := c.cache.Load(toRemove)
+				c.handler.Warn("Dirty items at the top of the purge queue, skipping eviction", "evict", item)
+				c.fifo.Enqueue(toRemove)
+				return true
+			}
+
 			c.cache.Delete(toRemove)
 			c.Evictions.Add(1)
-		}()
+			return false
+		}() {
+			return
+		}
 	}
 }
 
