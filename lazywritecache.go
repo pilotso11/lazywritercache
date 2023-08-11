@@ -24,6 +24,8 @@ package lazywritercache
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,7 +33,7 @@ import (
 
 type Cacheable interface {
 	Key() any
-	CopyKeyDataFrom(from Cacheable) Cacheable // This should copy in DB only ID fields.  If gorm.Model is implement this is ID, creationTime, updateTime, deleteTime
+	CopyKeyDataFrom(from Cacheable) Cacheable // This should copy in DB only ID fields.  If gorm.Model is implemented this is ID, creationTime, updateTime, deleteTime
 }
 
 // EmptyCacheable - placeholder used as a return value if the cache can't find anything
@@ -51,25 +53,27 @@ type CacheReaderWriter[K comparable, T Cacheable] interface {
 	Save(item T, tx any) error
 	BeginTx() (tx any, err error)
 	CommitTx(tx any)
-	Info(msg string)
-	Warn(msg string)
+	Info(msg string, action string, item ...T)
+	Warn(msg string, action string, item ...T)
 }
 
 type Config[K comparable, T Cacheable] struct {
-	handler      CacheReaderWriter[K, T]
-	Limit        int
-	LookupOnMiss bool // If true, a cache miss will query the DB, with associated performance hit!
-	WriteFreq    time.Duration
-	PurgeFreq    time.Duration
+	handler       CacheReaderWriter[K, T]
+	Limit         int
+	LookupOnMiss  bool // If true, a cache miss will query the DB, with associated performance hit!
+	WriteFreq     time.Duration
+	PurgeFreq     time.Duration
+	DeadlockLimit int // Number of times to retry a deadlock before giving up
 }
 
 func NewDefaultConfig[K comparable, T Cacheable](handler CacheReaderWriter[K, T]) Config[K, T] {
 	return Config[K, T]{
-		handler:      handler,
-		Limit:        10000,
-		LookupOnMiss: true,
-		WriteFreq:    500 * time.Millisecond,
-		PurgeFreq:    10 * time.Second,
+		handler:       handler,
+		Limit:         10000,
+		LookupOnMiss:  true,
+		WriteFreq:     500 * time.Millisecond,
+		PurgeFreq:     10 * time.Second,
+		DeadlockLimit: 5,
 	}
 }
 
@@ -216,14 +220,14 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() {
 		return
 	}
 
-	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", len(dirty)))
+	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", len(dirty)), "dirty-write")
 	success := 0
 	fail := 0
 
 	// Catch any panics
 	defer func() {
 		if r := recover(); r != nil {
-			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r))
+			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r), "dirty-write")
 		}
 	}()
 
@@ -239,7 +243,6 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() {
 	defer c.handler.CommitTx(tx)
 
 	for _, item := range dirty {
-
 		// Load the item from the DB.
 		// If the item already exists in the DB make sure we merge any key data if needed.
 		// ORMs will need this if they are managing row ID keys.
@@ -254,7 +257,23 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() {
 		c.DirtyWrites.Add(1)
 
 		if err != nil {
-			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err))
+			if strings.Contains(err.Error(), "deadlock") {
+				c.handler.Info(fmt.Sprintf("Deadlock detected, retrying %v", item.Key()), "write", item.(T))
+				// Put the items back in the dirty queue
+				for _, dirty := range dirty {
+					c.dirty[dirty.Key().(K)] = true
+				}
+				fail++
+				return
+			}
+			// Otherwise just report the error
+			val := reflect.ValueOf(item)
+			toStr := val.MethodByName("String")
+			strVal := ""
+			if toStr.IsValid() {
+				strVal = toStr.Call([]reflect.Value{})[0].String()
+			}
+			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v (%v)", old.Key(), err, strVal), "write", item.(T))
 			fail++
 			return // don't update cache
 		}
@@ -273,16 +292,16 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() {
 				// Re-save the item
 				c.cache[item.Key().(K)] = rCopy.CopyKeyDataFrom(item).(T)
 			} else {
-				c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()))
+				c.handler.Warn(fmt.Sprintf("Deferred update attempted on purged cache item, saved but not re-added: %v", item.Key()), "write", item.(T))
 			}
 		}()
 		success++
 	}
 
 	if fail > 0 {
-		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success))
+		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "dirty-write")
 	} else {
-		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success))
+		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
 	}
 }
 

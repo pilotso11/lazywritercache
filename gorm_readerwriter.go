@@ -30,10 +30,18 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// GormCacheReaderWriter is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
+// Logger is an interface that can be implemented to provide logging for the cache.
+// The default logger is log.Println
+type Logger interface {
+	Info(msg string, action string, item ...Cacheable)
+	Warn(msg string, action string, item ...Cacheable)
+	Error(msg string, action string, item ...Cacheable)
+}
+
+// GormCacheReaderWriter is the GORM implementation of the CacheReaderWriter.  It should work with any DB GORM supports.
 // It's been tested with Postgres and Mysql.
 //
-// UseTransactions should be set to true unless you have a really good reason not to.
+// UseTransactions should be set to true unless you have a strong reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
 //
@@ -45,19 +53,27 @@ type GormCacheReaderWriter[K comparable, T Cacheable] struct {
 	getTemplateItem     func(key K) T
 	UseTransactions     bool
 	PreloadAssociations bool
+	Logger              Logger
 }
 
 // Check interface is complete
 var _ CacheReaderWriter[string, EmptyCacheable] = (*GormCacheReaderWriter[string, EmptyCacheable])(nil)
 
 // NewGormCacheReaderWriter creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item Cacheable to your type.
-// THe itemTemplate function is used to create new items with only the key, which are then used by db.Find() to find your item by key.
-func NewGormCacheReaderWriter[K comparable, T Cacheable](db *gorm.DB, itemTemplate func(key K) T) GormCacheReaderWriter[K, T] {
+// The itemTemplate function is used to create new items with only the key, which are then used by db.Find() to find your item by key.
+func NewGormCacheReaderWriter[K comparable, T Cacheable](db *gorm.DB, itemTemplate func(key K) T, logger ...Logger) GormCacheReaderWriter[K, T] {
+	var alternateLogger Logger
+	if len(logger) > 0 {
+		alternateLogger = logger[0]
+	} else {
+		alternateLogger = nil
+	}
 	return GormCacheReaderWriter[K, T]{
 		db:                  db,
 		getTemplateItem:     itemTemplate,
 		UseTransactions:     true,
 		PreloadAssociations: true,
+		Logger:              alternateLogger,
 	}
 }
 
@@ -110,10 +126,26 @@ func (g GormCacheReaderWriter[K, T]) CommitTx(tx any) {
 	return
 }
 
-func (g GormCacheReaderWriter[K, T]) Info(msg string) {
-	log.Println("[info] ", msg)
+func (g GormCacheReaderWriter[K, T]) Info(msg string, action string, item ...T) {
+	if g.Logger != nil {
+		if len(item) > 0 {
+			g.Logger.Info(msg, action, item[0])
+		} else {
+			g.Logger.Info(msg, action)
+		}
+	} else {
+		log.Println("[info] ", msg)
+	}
 }
 
-func (g GormCacheReaderWriter[K, T]) Warn(msg string) {
-	log.Println("[warn] ", msg)
+func (g GormCacheReaderWriter[K, T]) Warn(msg string, action string, item ...T) {
+	if g.Logger != nil {
+		if len(item) > 0 {
+			g.Logger.Warn(msg, action, item[0])
+		} else {
+			g.Logger.Warn(msg, action)
+		}
+	} else {
+		log.Println("[warn] ", msg)
+	}
 }
