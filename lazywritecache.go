@@ -63,7 +63,8 @@ type Config[K comparable, T Cacheable] struct {
 	LookupOnMiss  bool // If true, a cache miss will query the DB, with associated performance hit!
 	WriteFreq     time.Duration
 	PurgeFreq     time.Duration
-	DeadlockLimit int // Number of times to retry a deadlock before giving up
+	DeadlockLimit int  // Number of times to retry a deadlock before giving up
+	SyncWrites    bool // Synchronize cache flush to storage, this is slower but can help with deadlock contention for some use cases, especially where multiple caches may be impacted by the same DB writes because of hooks
 }
 
 func NewDefaultConfig[K comparable, T Cacheable](handler CacheReaderWriter[K, T]) Config[K, T] {
@@ -211,8 +212,15 @@ func (c *LazyWriterCache[K, T]) getDirtyRecords() (dirty []Cacheable) {
 	return dirty
 }
 
+var globalWriterLock sync.Mutex
+
 // Go routine to Save the dirty records to the DB, this is the lazy writer
 func (c *LazyWriterCache[K, T]) saveDirtyToDB() {
+	if c.Config.SyncWrites {
+		globalWriterLock.Lock()
+		defer globalWriterLock.Unlock()
+	}
+
 	// Get all the dirty records
 	// return without any locks if there is no work
 	dirty := c.getDirtyRecords()
