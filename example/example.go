@@ -70,6 +70,8 @@ func main() {
 	gormRW := lazywritercache.NewGormCacheReaderWriter[string, Person](db, NewEmptyPerson)
 	cacheConfig := lazywritercache.NewDefaultConfig[string, Person](gormRW)
 	cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
+	defer cache.Shutdown()
+
 	defer cache.Flush()
 
 	// Do some work
@@ -88,8 +90,8 @@ func main() {
 // This is not a great example as it has rather high read/write ratio, but its good enough
 // to illustrate the api
 func doWork(cache *lazywritercache.LazyWriterCache[string, Person], name string) {
-	record, ok := cache.GetAndLock(name)
-	defer cache.Release()
+	record, ok, _ := cache.GetAndLock(name)
+	defer cache.Unlock()
 	if !ok || rand.Float64() < 0.025 { // new or 2.5% random chance of update
 		person := Person{Name: name, City: GetRandomCity()}
 		cache.Save(person)

@@ -23,6 +23,7 @@
 package lazywritercache
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand"
 	"strconv"
@@ -71,24 +72,33 @@ func TestCacheStoreLoad(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	defer cache.Shutdown()
 
-	cache.Lock()
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 
-	item3, ok := cache.GetAndLock("test1")
-	cache.Release()
+	item3, ok, err := cache.GetAndLock("test1")
+	assert.NoError(t, err)
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
-	item4, ok := cache.GetAndLock("test2")
-	cache.Release()
+	item4, ok, err := cache.GetAndLock("test2")
+	assert.NoError(t, err)
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Truef(t, ok, "loaded test2")
 	assert.Equal(t, item2, item4)
 
-	_, ok = cache.GetAndLock("missing")
-	cache.Release()
+	_, ok, err = cache.GetAndLock("missing")
+	assert.NoError(t, err)
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Falsef(t, ok, "not loaded missing")
 
 }
@@ -97,21 +107,29 @@ func TestCacheDirtyList(t *testing.T) {
 	item := testItem{id: "test11"}
 	item2 := testItem{id: "test22"}
 	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
-	cache.Lock()
+	defer cache.Shutdown()
+
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Len(t, cache.dirty, 2, "dirty records")
-	d := cache.getDirtyRecords()
+	d, err := cache.getDirtyRecords()
+	assert.NoError(t, err)
 	assert.Contains(t, d, item)
 	assert.Contains(t, d, item2)
 	assert.Len(t, cache.dirty, 0, "dirty records")
 
-	cache.Lock()
+	err = cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Len(t, cache.dirty, 1, "dirty records")
-	d = cache.getDirtyRecords()
+	d, err = cache.getDirtyRecords()
+	assert.NoError(t, err)
 	assert.Contains(t, d, item2)
 }
 
@@ -119,37 +137,49 @@ func TestInvalidate(t *testing.T) {
 	item := testItem{id: "test11"}
 	item2 := testItem{id: "test22"}
 	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
-	cache.Lock()
+	defer cache.Shutdown()
+
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 	assert.Len(t, cache.dirty, 2, "dirty records")
 
-	cache.Invalidate()
+	err = cache.Invalidate()
+	assert.NoError(t, err)
 	assert.Len(t, cache.dirty, 0, "dirty records")
 	assert.Len(t, cache.cache, 0, "cache is empty")
 }
 
 func TestCacheLockUnlockNoPanics(t *testing.T) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
 
 	assert.NotPanics(t, func() {
-		cache.Lock()
-		cache.Release()
-	}, "Lock and Release")
+		err := cache.Lock()
+		assert.NoError(t, err)
+		err = cache.Unlock()
+		assert.NoError(t, err)
+	}, "Lock and Unlock")
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
 
 	assert.NotPanics(t, func() {
-		cache.GetAndLock("missing")
-		cache.Release()
-	}, "get and Release")
+		_, _, err := cache.GetAndLock("missing")
+		assert.NoError(t, err)
+		err = cache.Unlock()
+		assert.NoError(t, err)
+	}, "get and Unlock")
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
 
 	assert.NotPanics(t, func() {
 		item := testItem{id: "test"}
-		cache.GetAndLock("missing")
+		_, _, err := cache.GetAndLock("missing")
+		assert.NoError(t, err)
 		cache.Save(item)
-		cache.Release()
+		err = cache.Unlock()
+		assert.NoError(t, err)
 	}, "get and Save")
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
 
@@ -157,6 +187,7 @@ func TestCacheLockUnlockNoPanics(t *testing.T) {
 
 func TestCachePanicOnBadLockState(t *testing.T) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
 
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
 	assert.Panics(t, func() {
@@ -164,15 +195,16 @@ func TestCachePanicOnBadLockState(t *testing.T) {
 	}, "Save when not locked")
 
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
+	err := cache.Unlock()
+	assert.NotNil(t, err)
 	assert.Panics(t, func() {
-		cache.Release()
-	}, "Release when not locked")
+		cache.unlockWithPanic()
+	}, "Unlock when not locked")
 
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
 	cache.locked.Store(true)
-	assert.Panics(t, func() {
-		cache.Lock()
-	}, "Lock when not in mutex but locked")
+	err = cache.Lock()
+	assert.NotNil(t, err)
 
 }
 
@@ -208,14 +240,18 @@ func BenchmarkParallel_x10_CacheRead20k(b *testing.B) {
 
 func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
+
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		keys = append(keys, id)
 		item := testItem{id: id}
-		cache.Lock()
+		err := cache.Lock()
+		assert.Nil(b, err)
 		cache.Save(item)
-		cache.Release()
+		err = cache.Unlock()
+		assert.Nil(b, err)
 	}
 
 	wait := sync.WaitGroup{}
@@ -224,10 +260,12 @@ func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 		go func() {
 			for i := 0; i < b.N; i++ {
 				key := rand.Intn(cacheSize)
-				_, ok := cache.GetAndLock(keys[key])
+				_, ok, err := cache.GetAndLock(keys[key])
+				assert.Nil(b, err)
 				if ok {
 				}
-				cache.Release()
+				err = cache.Unlock()
+				assert.Nil(b, err)
 			}
 			wait.Add(-1)
 		}()
@@ -238,12 +276,16 @@ func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 
 func cacheWrite(b *testing.B, cacheSize int) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
+
 	for i := 0; i < b.N; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		item := testItem{id: id}
-		cache.Lock()
+		err := cache.Lock()
+		assert.Nil(b, err)
 		cache.Save(item)
-		cache.Release()
+		err = cache.Unlock()
+		assert.Nil(b, err)
 	}
 	b.ReportAllocs()
 }
@@ -251,24 +293,30 @@ func cacheWrite(b *testing.B, cacheSize int) {
 func cacheRead(b *testing.B, cacheSize int) {
 	// init
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
+
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		keys = append(keys, id)
 		item := testItem{id: id}
-		cache.Lock()
+		err := cache.Lock()
+		assert.Nil(b, err)
 		cache.Save(item)
-		cache.Release()
+		err = cache.Unlock()
+		assert.Nil(b, err)
 	}
 
 	k := 0
 	for i := 0; i < b.N; i++ {
 		key := rand.Intn(cacheSize)
-		_, ok := cache.GetAndLock(keys[key])
+		_, ok, err := cache.GetAndLock(keys[key])
+		assert.Nil(b, err)
 		if ok {
 			k++
 		}
-		cache.Release()
+		err = cache.Unlock()
+		assert.Nil(b, err)
 	}
 	assert.Truef(b, k > 0, "critical failure")
 	b.ReportAllocs()
@@ -279,19 +327,26 @@ func TestCacheEviction(t *testing.T) {
 	cfg := newNoOpTestConfig()
 	cfg.Limit = 20
 	cache := NewLazyWriterCache(cfg)
+	defer cache.Shutdown()
 
 	for i := 0; i < 30; i++ {
 		id := strconv.Itoa(i)
 		item := testItem{id: id}
-		cache.Lock()
+		err := cache.Lock()
+		assert.NoError(t, err)
 		cache.Save(item)
-		cache.Release()
+		err = cache.Unlock()
+		assert.NoError(t, err)
 	}
 	assert.Len(t, cache.cache, 30)
-	cache.evictionProcessor()
+	err := cache.evictionProcessor()
+	assert.NoError(t, err)
+
 	assert.Len(t, cache.cache, 30, "nothing evicted until flushed")
-	cache.Flush()
-	cache.evictionProcessor()
+	err = cache.Flush()
+	assert.NoError(t, err)
+	err = cache.evictionProcessor()
+	assert.NoError(t, err)
 	assert.Len(t, cache.cache, 20)
 	_, ok := cache.cache["0"]
 	assert.Falsef(t, ok, "0 has been evicted")
@@ -312,13 +367,17 @@ func TestGormLazyCache_GetAndRelease(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
 
-	cache.Lock()
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 
-	item3, ok := cache.GetAndRelease("test1")
+	item3, ok, err := cache.GetAndRelease("test1")
+	assert.NoError(t, err)
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 	assert.Falsef(t, cache.locked.Load(), "not locked after GetAndRelease")
@@ -330,20 +389,25 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanic(t *testing.T) {
 	item2 := testItem{id: "test2"}
 	cfg := newNoOpTestConfig(true)
 	cache := NewLazyWriterCache(cfg)
+	defer cache.Shutdown()
+
 	cache.LookupOnMiss = true
 
-	cache.Lock()
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 
-	item3, ok := cache.GetAndRelease("test1")
+	item3, ok, err := cache.GetAndRelease("test1")
+	assert.NoError(t, err)
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 	assert.Falsef(t, cache.locked.Load(), "not locked after GetAndRelease")
 
 	assert.Panics(t, func() {
-		_, ok := cache.GetAndRelease("test4")
+		_, ok, _ := cache.GetAndRelease("test4")
 		assert.Falsef(t, ok, "should not be found")
 	})
 	assert.Falsef(t, cache.locked.Load(), "not locked after GetAndRelease")
@@ -353,6 +417,8 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanic(t *testing.T) {
 
 func TestCacheStats_JSON(t *testing.T) {
 	cache := NewLazyWriterCache(newNoOpTestConfig())
+	defer cache.Shutdown()
+
 	jsonStr := cache.JSON()
 
 	stats := make(map[string]int64)
@@ -369,18 +435,23 @@ func TestRange(t *testing.T) {
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
 	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	defer cache.Shutdown()
 
-	cache.Lock()
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
 	cache.Save(item3)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 
 	n := 0
-	cache.Range(func(k string, v testItem) bool {
+	r, err := cache.Range(func(k string, v testItem) bool {
 		n++
 		return true
 	})
+	assert.NoError(t, err)
+	assert.Equal(t, 3, r)
 
 	assert.Equal(t, 3, n, "iterated over all cache items")
 }
@@ -390,40 +461,49 @@ func TestRangeAbort(t *testing.T) {
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
 	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	defer cache.Shutdown()
 
-	cache.Lock()
+	err := cache.Lock()
+	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
 	cache.Save(item3)
-	cache.Release()
+	err = cache.Unlock()
+	assert.NoError(t, err)
 
 	n := 0
-	cache.Range(func(k string, v testItem) bool {
+	r, err := cache.Range(func(k string, v testItem) bool {
 		n++
 		if n == 2 {
 			return false
 		}
 		return true
 	})
-
+	assert.NoError(t, err)
+	assert.Equal(t, 2, r)
 	assert.Equal(t, 2, n, "iterated over all cache items")
 }
 
 func TestNoGoroutineLeaks(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
-	cache.Lock()
-	cache.Save(testItem{id: "test"})
-	cache.Release()
-	time.Sleep(100 * time.Millisecond)
-	cache.Shutdown()
-	time.Sleep(2 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, newNoOpTestConfig())
 
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "test"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	cache.Shutdown()
+	time.Sleep(300 * time.Millisecond)
 }
 
-func TestGetFromLockedPanicIfNotLocked(t *testing.T) {
-	assert.Panics(t, func() {
+func TestGetFromLockedErrIfNotLocked(t *testing.T) {
+	assert.NotPanics(t, func() {
 		cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
-		cache.GetFromLocked("test")
+		_, _, err := cache.GetFromLocked("test")
+		assert.NotNil(t, err)
 	})
 }

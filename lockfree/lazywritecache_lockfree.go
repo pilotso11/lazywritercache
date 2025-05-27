@@ -23,7 +23,11 @@
 package lockfree
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/pilotso11/lazywritercache"
@@ -60,11 +64,12 @@ type CacheReaderWriterLF[T CacheableLF] interface {
 }
 
 type ConfigLF[T CacheableLF] struct {
-	handler      CacheReaderWriterLF[T]
-	Limit        int
-	LookupOnMiss bool // If true, a cache miss will query the DB, with associated performance hit!
-	WriteFreq    time.Duration
-	PurgeFreq    time.Duration
+	handler         CacheReaderWriterLF[T]
+	Limit           int
+	LookupOnMiss    bool // If true, a cache miss will query the DB, with associated performance hit!
+	WriteFreq       time.Duration
+	PurgeFreq       time.Duration
+	FlushOnShutdown bool
 }
 
 func NewDefaultConfigLF[T CacheableLF](handler CacheReaderWriterLF[T]) ConfigLF[T] {
@@ -86,20 +91,32 @@ func NewDefaultConfigLF[T CacheableLF](handler CacheReaderWriterLF[T]) ConfigLF[
 // cache for update, and then use a single writer to persist to the DB - with some clustering strategy
 type LazyWriterCacheLF[T CacheableLF] struct {
 	ConfigLF[T]
-	cache    *xsync.MapOf[string, T]
-	dirty    *xsync.MapOf[string, bool]
-	fifo     *lockfreequeue.LockFreeQueue[string]
-	stopping bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	cache  *xsync.MapOf[string, T]
+	dirty  *xsync.MapOf[string, bool]
+	fifo   *lockfreequeue.LockFreeQueue[string]
 	lazywritercache.CacheStats
 }
 
-// NewLazyWriterCacheLF creates a new cache and starts up its lazy db writer ticker.
+// NewLazyWriterCacheLF creates a new, and starts up its lazy db writer ticker.
 // Users need to pass a DB Find function and ensure their objects implement lazywritercache.Cacheable which has two functions,
 // one to return the Key() and the other to copy key variables into the cached item from the DB loaded item. (i.e. the number ID, update time etc.)
 // because the lazy write cannot just "Save" the item back to the DB as it might have been updated during the lazy write as its asynchronous.
 func NewLazyWriterCacheLF[T CacheableLF](cfg ConfigLF[T]) *LazyWriterCacheLF[T] {
+	return NewLazyWriterCacheWithContextLF(context.Background(), cfg)
+}
+
+// NewLazyWriterCacheWithContextLF creates a new cache passing in a parent context, and starts up its lazy db writer ticker.
+// Users need to pass a DB Find function and ensure their objects implement lazywritercache.Cacheable which has two functions,
+// one to return the Key() and the other to copy key variables into the cached item from the DB loaded item. (i.e. the number ID, update time etc.)
+// because the lazy write cannot just "Save" the item back to the DB as it might have been updated during the lazy write as its asynchronous.
+func NewLazyWriterCacheWithContextLF[T CacheableLF](ctx context.Context, cfg ConfigLF[T]) *LazyWriterCacheLF[T] {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	cache := LazyWriterCacheLF[T]{
 		ConfigLF: cfg,
+		ctx:      ctx,
+		cancel:   cancel,
 		cache:    xsync.NewMapOf[T](),
 		dirty:    xsync.NewMapOf[bool](),
 		fifo:     lockfreequeue.NewLockFreeQueue[string](),
@@ -137,7 +154,7 @@ func (c *LazyWriterCacheLF[T]) Load(key string) (T, bool) {
 // Save updates an item in the cache.
 // The cache must already have been locked, if not we will panic.
 //
-// The expectation is GetAndLock has been called first, and a Release has been deferred.
+// The expectation is GetAndLock has been called first, and an Unlock has been deferred.
 func (c *LazyWriterCacheLF[T]) Save(item T) {
 	c.Stores.Add(1)
 	c.cache.Store(item.Key(), item) // save in cache
@@ -235,16 +252,13 @@ func (c *LazyWriterCacheLF[T]) ClearDirty() {
 
 // Go routine to evict the cache every few seconds to keep it trimmed to the desired size - or there abouts
 func (c *LazyWriterCacheLF[T]) evictionManager() {
-	cnt := time.Duration(0)
+	tick := time.NewTicker(c.PurgeFreq)
 	for {
-		time.Sleep(time.Second) // every second we check for stop
-		cnt = cnt + time.Second
-		if c.stopping {
+		select {
+		case <-c.ctx.Done():
 			return
-		}
-		if cnt > c.PurgeFreq {
+		case <-tick.C:
 			c.evictionProcessor()
-			cnt = 0
 		}
 	}
 }
@@ -274,14 +288,19 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor() {
 
 // this is the lazy writer goroutine
 func (c *LazyWriterCacheLF[T]) lazyWriter() {
+	ticker := time.NewTicker(c.WriteFreq)
 	for {
-		time.Sleep(c.WriteFreq)
-		c.saveDirtyToDB()
-		if c.stopping {
+		select {
+		case <-c.ctx.Done():
+			if c.ConfigLF.FlushOnShutdown {
+				c.Flush()
+			}
 			return
+		case <-ticker.C:
+			c.saveDirtyToDB()
+
 		}
 	}
-
 }
 
 // Flush forces all dirty items to be written to the database.
@@ -303,7 +322,7 @@ func (c *LazyWriterCacheLF[T]) Range(action func(k string, v T) bool) (n int) {
 }
 
 // Shutdown signals to the cache it should stop any running goroutines.
-// This does not Flush the cache first, so it is recommended call Flush beforehand.
+// This does not Flush the cache first unless ConfigLF.FlushOnShutdown is true.
 func (c *LazyWriterCacheLF[T]) Shutdown() {
-	c.stopping = true
+	c.cancel()
 }

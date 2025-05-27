@@ -31,21 +31,25 @@ you could conceivably put a lazy write cache in front of redis with a fairly qui
 
 Benchmark results for cache size of 20k items and 100k items on macbook apple silicon.
 
+The lock-free implementation has roughy 2x performance pickup for many parallel reads at a roughly 2x write penalty.
+
 | Benchmark                | ns/op | b/op | allocs/op |
 |--------------------------|------:|-----:|----------:|
-| CacheWrite 20k           |   167 |  147 |         3 |
-| CacheWrite 100k          |   168 |  146 |         4 |
+| CacheWrite 20k           |   137 |  149 |         3 |
+| CacheWrite 100k          |   168 |  141 |         3 |
 | CacheRead 20k            |    48 |    0 |         0 |
-| CacheRead 100k           |    54 |    1 |         0 |
-| CacheRead 100k 5 threads |   677 |    4 |         0 |
+| CacheRead 100k           |    57 |    1 |         0 |
+| CacheRead 20k 5 threads  |   726 |    4 |         0 |
+| CacheRead 20k 10 threads |  1505 |    4 |         0 |
 
 | Benchmark Lock Free      | ns/op | b/op | allocs/op |
 |--------------------------|------:|-----:|----------:|
-| CacheWrite 20k           |   299 |  109 |         6 |
-| CacheWrite 100k          |   270 |  113 |         7 |
-| CacheRead 20k            |    39 |    0 |         0 |
-| CacheRead 100k           |    52 |    1 |         0 |
-| CacheRead 100k 5 threads |   637 |    4 |         0 |
+| CacheWrite 20k           |   214 |  109 |         6 |
+| CacheWrite 100k          |   253 |  113 |         7 |
+| CacheRead 20k            |    42 |    0 |         0 |
+| CacheRead 100k           |    56 |    1 |         0 |
+| CacheRead 20k 5 threads  |   292 |    4 |         0 |
+| CacheRead 20k 10 threads |   706 |    4 |         0 |
 
 
 # How do I use it?

@@ -23,6 +23,7 @@
 package lockfree
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand"
 	"strconv"
@@ -72,6 +73,7 @@ func TestCacheStoreLoadLF(t *testing.T) {
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	defer cache.Shutdown()
 
 	cache.Save(item)
 	cache.Save(itemLF)
@@ -93,6 +95,8 @@ func TestCacheDirtyListLF(t *testing.T) {
 	item := testItemLF{id: "test11"}
 	itemLF := testItemLF{id: "testLFLF"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
 	cache.Save(item)
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "dirty records")
@@ -118,10 +122,11 @@ func findIn(dirty *xsync.MapOf[string, bool], item testItemLF) (found bool) {
 
 func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
 
 	assert.NotPanics(t, func() {
 		cache.Load("missing")
-	}, "get and Release")
+	}, "get and Unlock")
 
 	assert.NotPanics(t, func() {
 		item := testItemLF{id: "test"}
@@ -162,6 +167,8 @@ func BenchmarkParallel_x10_CacheRead20kLF(b *testing.B) {
 
 func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
@@ -189,6 +196,8 @@ func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 
 func cacheWriteLF(b *testing.B, cacheSize int) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
 	for i := 0; i < b.N; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		item := testItemLF{id: id}
@@ -200,6 +209,8 @@ func cacheWriteLF(b *testing.B, cacheSize int) {
 func cacheReadLF(b *testing.B, cacheSize int) {
 	// init
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
@@ -225,6 +236,7 @@ func TestCacheEvictionLF(t *testing.T) {
 	cfg := newNoOpTestConfigLF()
 	cfg.Limit = 20
 	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
 
 	for i := 0; i < 30; i++ {
 		id := strconv.Itoa(i)
@@ -258,6 +270,7 @@ func TestGormLazyCache_GetAndReleaseLF(t *testing.T) {
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
 
 	cache.Save(item)
 	cache.Save(itemLF)
@@ -273,6 +286,8 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF(true)
 	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+
 	cache.LookupOnMiss = true
 
 	cache.Save(item)
@@ -292,6 +307,8 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 
 func TestCacheStats_JSONLF(t *testing.T) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
 	jsonStr := cache.JSON()
 
 	stats := make(map[string]int64)
@@ -308,6 +325,7 @@ func TestRangeLF(t *testing.T) {
 	itemLF := testItemLF{id: "testLF"}
 	item3 := testItemLF{id: "test3"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	defer cache.Shutdown()
 
 	cache.Save(item)
 	cache.Save(itemLF)
@@ -327,6 +345,7 @@ func TestRangeAbortLF(t *testing.T) {
 	itemLF := testItemLF{id: "testLF"}
 	item3 := testItemLF{id: "test3"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	defer cache.Shutdown()
 
 	cache.Save(item)
 	cache.Save(itemLF)
@@ -346,10 +365,12 @@ func TestRangeAbortLF(t *testing.T) {
 
 func TestNoGoroutineLeaksLF(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, newNoOpTestConfigLF())
 	cache.Save(testItemLF{id: "test"})
 	time.Sleep(100 * time.Millisecond)
+	cancel()
 	cache.Shutdown()
-	time.Sleep(2 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 }
