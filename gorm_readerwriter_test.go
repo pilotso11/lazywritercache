@@ -59,12 +59,12 @@ func TestGormReaderWriter(t *testing.T) {
 	}(db)
 
 	// First dirty hit should return an empty item
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT 1`).WithArgs("item1").WillReturnRows(sqlmock.NewRows(testColumns))
+	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).WithArgs("item1", 1).WillReturnRows(sqlmock.NewRows(testColumns))
 	item1, ok := cache.GetAndRelease("item1")
 	assert.False(t, ok, "item should not be found")
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT 1`).WithArgs("item1").WillReturnRows(sqlmock.NewRows(testColumns))
+	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).WithArgs("item1", 1).WillReturnRows(sqlmock.NewRows(testColumns))
 	mock.ExpectQuery(`INSERT INTO "test_db_items" ("value") VALUES ($1) RETURNING "id"`).WithArgs("item1").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 	mock.ExpectCommit()
 	item1.Value = "item1"
