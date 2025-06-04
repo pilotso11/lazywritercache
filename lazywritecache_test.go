@@ -870,13 +870,15 @@ func TestCache_SaveDirtyToDB_BeginTxError(t *testing.T) {
 	assert.Error(t, flushErr, "Flush should return an error from BeginTx")
 	assert.Equal(t, expectedError, flushErr, "Error from Flush should be the one set in BeginTxError")
 
-	// Item should remain dirty - NOTE: Current lazycache.go has a bug and clears the dirty list.
-	// This assertion reflects the current buggy behavior. Ideally, it should be true.
-	_, itemIsStillDirtyAfterFlush := cache.dirty[itemKey]
-	assert.False(t, itemIsStillDirtyAfterFlush, "Item should be cleared from dirty list due to current bug in saveDirtyToDB error handling for BeginTx")
+	// Item should remain dirty now that the bug is fixed
+	errLock := cache.Lock()
+	assert.NoError(t, errLock, "Failed to lock cache for checking dirty state")
+	_, isDirty := cache.dirty[itemKey]
+	cache.Unlock()
+	assert.True(t, isDirty, "Item should remain dirty after BeginTx error")
 
-	// Save should not have been called
-	assert.Equal(t, int64(0), handler.SaveCallCount[itemKey], "Save should not have been called") // Cast 0 to int64
+	// Ensure Save was not called
+	assert.Equal(t, int64(0), handler.SaveCallCount[itemKey], "Save should not have been called")
 
 	handler.ResetCountersAndMessages()
 	handler.SetBeginTxError(nil) // cleanup
@@ -987,34 +989,39 @@ func TestCache_EvictionProcessor_SkipDirty(t *testing.T) {
 
 	// Manually call evictionProcessor
 	// Since item1 is dirty and at the head, and cache limit is 1,
-	// evictionProcessor should try to evict item1 but skip it because it's dirty.
+	// evictionProcessor should try to evict item1 but skip it because it's dirty and re-queue it.
 	err = cache.evictionProcessor()
 	assert.NoError(t, err, "evictionProcessor itself shouldn't error here")
 
-	// Assert that Warn method was called with "Dirty items at the top of the purge queue"
-	// This message is logged if the eviction candidate is dirty.
+	// Assert that Warn method was called with the new message
 	assert.True(t, handler.WarnCallCount > 0, "Warn should have been called")
 	foundSkipMessage := false
-	expectedMessage := "Dirty items at the top of the purge queue, increase flush rate or db performance"
+	// Expected new message: "Dirty item %v at the top of the purge queue, skipping eviction and re-queueing."
+	expectedMessage := fmt.Sprintf("Dirty item %v at the top of the purge queue, skipping eviction and re-queueing.", item1Key)
 	for _, msg := range handler.WarnMessages {
 		if msg == expectedMessage {
 			foundSkipMessage = true
 			break
 		}
 	}
-	assert.True(t, foundSkipMessage, "Expected skip dirty message not found in Warn messages. Got: %v", handler.WarnMessages)
+	assert.True(t, foundSkipMessage, "Expected skip dirty message ('%s') not found in Warn messages. Got: %v", expectedMessage, handler.WarnMessages)
 
 	// Assert that cache size is still 2 (nothing was evicted)
 	assert.Len(t, cache.cache, 2, "Cache size should still be 2")
 
-	// Assert FIFO still contains both items, item1 at the head
-	// Peeking into fifo directly is hard without exporting it or adding methods.
-	// We can infer by trying to evict again after clearing one.
-	// For now, rely on the cache length and the warning.
-	// If item1 (head) was skipped, and limit is 1, item2 (next) would not be considered in this single pass
-	// unless evictionProcessor loops until a non-dirty item is found or fifo is exhausted.
-	// The current evictionProcessor logic processes one candidate per call if it's at/over limit.
-	// It tries to evict `c.fifo.front()`. If that's dirty, it logs and stops for that run.
+	// Assert FIFO order: item1 (dirty, skipped) should be at the end, item2 should be at the head.
+	// The evictionProcessor's loop might run multiple times if not careful with test setup or if limit is > 1.
+	// With Limit = 1, the first attempt on item1 re-queues it. The loop in evictionProcessor might stop or continue.
+	// The current evictionProcessor's inner anonymous func returns (true, nil) after re-queueing,
+	// which makes the outer loop in evictionProcessor `if done { return nil }`. So it processes one candidate per call.
+	errLock := cache.Lock()
+	assert.NoError(t, errLock)
+	assert.Equal(t, 2, len(cache.fifo), "FIFO queue should still have 2 items")
+	if len(cache.fifo) == 2 { // Guard for test robustness
+		assert.Equal(t, item2Key, cache.fifo[0], "item2 should now be at the head of fifo")
+		assert.Equal(t, item1Key, cache.fifo[1], "item1 (re-queued) should be at the tail of fifo")
+	}
+	cache.Unlock()
 
 	handler.ResetCountersAndMessages()
 }

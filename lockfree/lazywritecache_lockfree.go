@@ -272,7 +272,7 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor() {
 			if ok && dirty {
 				// This is a dirty item, we can't evict it, so we put it back on the queue
 				item, _ := c.cache.Load(toRemove)
-				c.handler.Warn("Dirty items at the top of the purge queue, skipping eviction", "evict", item)
+				c.handler.Warn(fmt.Sprintf("Dirty item %v at the top of the purge queue, skipping eviction and re-queueing.", toRemove), "evict", item)
 				c.fifo.Enqueue(toRemove)
 				return true
 			}

@@ -28,7 +28,6 @@ import (
 	"errors" // Added for SetErrorOnSave etc.
 	"math/rand"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -413,6 +412,7 @@ func TestCacheLF_SaveDirtyToDB_PanicRecovery(t *testing.T) {
 	_, isDirtyNormal := cache.dirty.Load(normalItemKey)
 	assert.True(t, isDirtyNormal, "Normal item should be dirty before flush")
 
+
 	assert.NotPanics(t, func() {
 		cache.Flush() // Flush calls saveDirtyToDB
 	}, "Flush should not propagate panic from Save")
@@ -575,7 +575,7 @@ func TestCacheLF_LazyWriter_SaveDirtyErrorInLoop(t *testing.T) {
 
 	handler.ResetCountersAndMessages()
 	handler.SetErrorOnSave(itemKey, nil) // cleanup
-	cache.Shutdown()                     // Explicitly shutdown
+	cache.Shutdown() // Explicitly shutdown
 }
 
 func TestCacheLF_SaveDirtyToDB_HandlerFindError(t *testing.T) {
@@ -685,7 +685,7 @@ func TestCacheLF_SaveDirtyToDB_PurgedItemUpdate(t *testing.T) {
 	// but *before* the cache updates its internal state for that item post-save.
 	handler.SetPostSaveCallback(func(key string) {
 		if key == itemKey {
-			cache.cache.Delete(itemKey) // Simulate item being purged/evicted
+			cache.cache.Delete(itemKey)      // Simulate item being purged/evicted
 			// cache.fifo.Remove(itemKey) // .Remove is not available on lockfreequeue, and not essential for this test's core logic
 		}
 	})
@@ -786,6 +786,7 @@ func TestCacheLF_SaveDirtyToDB_CommitTxPanic(t *testing.T) {
 		cache.Flush() // saveDirtyToDB is called by Flush
 	}, "Flush should not propagate panic from CommitTx")
 
+
 	// Assert that Warn method was called with the commit panic message
 	handler.mu.Lock()
 	assert.True(t, handler.WarnCallCount.Load() > 0, "Warn should have been called")
@@ -815,9 +816,9 @@ func TestCacheLF_SaveDirtyToDB_CommitTxPanic(t *testing.T) {
 
 func TestCacheLF_EvictionProcessor_ReEnqueueDirty(t *testing.T) {
 	cfg, handler := newNoOpTestConfigLF()
-	cfg.Limit = 1     // Set limit to 1 to force eviction consideration
-	cfg.PurgeFreq = 0 // Disable auto-purging for manual test control, evictionProcessor called manually
-	cfg.WriteFreq = 0 // Disable auto-writing for manual test control
+	cfg.Limit = 1                 // Set limit to 1 to force eviction consideration
+	cfg.PurgeFreq = 0             // Disable auto-purging for manual test control, evictionProcessor called manually
+	cfg.WriteFreq = 0             // Disable auto-writing for manual test control
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled
@@ -845,14 +846,14 @@ func TestCacheLF_EvictionProcessor_ReEnqueueDirty(t *testing.T) {
 	handler.mu.Lock()
 	assert.True(t, handler.WarnCallCount.Load() > 0, "Warn should have been called")
 	foundSkipMessage := false
-	expectedMessage := "Dirty items at the top of the purge queue, increase flush rate or db performance"
+	expectedMessage := fmt.Sprintf("Dirty item %v at the top of the purge queue, skipping eviction and re-queueing.", item1Key)
 	for _, msg := range handler.WarnMessages {
 		if msg == expectedMessage {
 			foundSkipMessage = true
 			break
 		}
 	}
-	assert.True(t, foundSkipMessage, "Expected skip dirty message not found in Warn messages. Got: %v", handler.WarnMessages)
+	assert.True(t, foundSkipMessage, "Expected skip dirty message ('%s') not found in Warn messages. Got: %v", expectedMessage, handler.WarnMessages)
 	handler.mu.Unlock()
 
 	// Assert that cache size is still 2 (nothing was evicted)

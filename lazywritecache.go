@@ -285,7 +285,19 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 	// even though it holds the lock on the DB side longer.
 	tx, err := c.handler.BeginTx()
 	if err != nil {
-		return
+		c.handler.Warn(fmt.Sprintf("Error beginning transaction: %v", err), "BeginTx", nil) // Log original error
+		// Add items back to dirty list if BeginTx fails
+		if lockErr := c.Lock(); lockErr == nil { // Lock the cache to modify c.dirty
+			for _, item := range dirty { // dirty variable is from getDirtyRecords()
+				c.dirty[item.Key().(K)] = true
+			}
+			c.Unlock() // Unlock after modification
+		} else {
+			// This is a problematic state: BeginTx failed AND we couldn't re-lock the cache
+			// to mark items as dirty again. Log this.
+			c.handler.Warn(fmt.Sprintf("CRITICAL: BeginTx failed with '%v' AND failed to re-lock cache to restore dirty flags: %v. Dirty items may be lost.", err, lockErr), "dirty-write-error")
+		}
+		return err // Return the original BeginTx error
 	}
 	// Ensure the commit runs
 	defer c.handler.CommitTx(tx)
@@ -402,10 +414,34 @@ func (c *LazyWriterCache[K, T]) evictionProcessor() error {
 				return false, err
 			}
 			defer c.unlockWithPanic()
+			if len(c.fifo) == 0 { // Should not happen if cLen > c.Limit, but good practice
+				return true, nil // Nothing to process, stop this cycle
+			}
 			toRemove := c.fifo[0]
+			itemInCache, itemExistsInCache := c.cache[toRemove] // Check if item still in cache
+
 			if c.dirty[toRemove] {
-				c.handler.Warn("Dirty items at the top of the purge queue, skipping eviction", "eviction")
-				return true, nil
+				var itemToLog T
+				if itemExistsInCache {
+					itemToLog = itemInCache
+				} else {
+					// If item not in cache, create a temporary one just for logging key
+					// This requires T to have a settable Key field or a constructor that accepts a key.
+					// Assuming T is a struct type and Key() returns a field.
+					// This part is tricky without knowing T's structure or having a newKey(K) T func.
+					// For logging, we'll pass the key directly if item not found.
+					// Let's construct a simple Cacheable for logging if needed
+					keyVal := toRemove
+					tempItemForLog := (new(T)).CopyKeyDataFrom(simpleLoggableCacheable{key: keyVal})
+					itemToLog, _ = tempItemForLog.(T)
+				}
+				c.handler.Warn(fmt.Sprintf("Dirty item %v at the top of the purge queue, skipping eviction and re-queueing.", toRemove), "eviction", itemToLog)
+
+				// Re-queue the dirty item to the end of the fifo
+				c.fifo = c.fifo[1:] // Pop item from head
+				c.fifo = append(c.fifo, toRemove) // Append to tail
+
+				return true, nil // Still exit the loop for this eviction cycle, but item is re-queued
 			}
 			c.fifo = c.fifo[1:] // pop item
 			delete(c.cache, toRemove)
@@ -483,10 +519,29 @@ func (c *LazyWriterCache[K, T]) Range(action func(k K, v T) bool) (n int, err er
 	for k, v := range c.cache {
 		n++
 		if !action(k, v) {
-			return
+			return // n will be count up to abort
 		}
 	}
-	return
+	return // n will be total count
+}
+
+// simpleLoggableCacheable is a helper for logging when the actual item T might not be in cache.
+type simpleLoggableCacheable struct {
+	key any
+}
+
+func (s simpleLoggableCacheable) Key() any {
+	return s.key
+}
+
+func (s simpleLoggableCacheable) CopyKeyDataFrom(from Cacheable) Cacheable {
+	// This is primarily for satisfying the Cacheable interface for logging.
+	// If 'from' has a key, we could try to copy it, but for this specific use,
+	// the key is already set during construction.
+	if fromS, ok := from.(simpleLoggableCacheable); ok {
+		s.key = fromS.key
+	}
+	return s
 }
 
 // Shutdown signals to the cache it should stop any running goroutines.
