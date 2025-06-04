@@ -15,6 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: true
 
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -57,7 +60,7 @@ jobs:
         git commit -m "chore: Updated coverage badge."
 
     - name: Push coverage badge
-      if: steps.verify-changed-files.outputs.files_changed == 'true'
+      if: steps.verify-changed-files.outputs.files_changed == 'true' &&  ${{ github.ref == 'refs/heads/master' }}
       uses: ad-m/github-push-action@master
       with:
         github_token: ${{ github.token }}
