@@ -26,7 +26,7 @@ import (
 	"errors"
 	"log"
 	"sync"
-	// stdAtomic "sync/atomic" // No longer needed
+	// No "sync/atomic" import
 )
 
 type NoOpReaderWriter[T Cacheable] struct {
@@ -35,25 +35,23 @@ type NoOpReaderWriter[T Cacheable] struct {
 	succeedOnFind      map[string]bool
 	errorOnSave        map[string]error
 	panicOnLoad        bool
-	panicOnWrite       bool // Global panic on write
-	panicOnSaveKey     string // Specific key to cause panic on Save
+	panicOnWrite       bool
+	panicOnSaveKey     string
 	beginTxError       error
 	commitTxPanic      bool
 	deadlockErrorCount map[string]int
 	deadlockRetries    map[string]int
 
-	// For testing specific scenarios
 	PostSaveCallback func(key string)
-	FindCallCount    int64 // Changed to int64
-	SaveCallCount    map[string]int64 // Changed map value to int64
-	WarnCallCount    int64 // Changed to int64
+	FindCallCount    int64
+	SaveCallCount    map[string]int64
+	WarnCallCount    int64
 	WarnMessages     []string
-	InfoCallCount    int64 // Changed to int64
+	InfoCallCount    int64
 	InfoMessages     []string
 	mu               sync.Mutex
 }
 
-// Check interface is complete
 var _ CacheReaderWriter[string, EmptyCacheable] = (*NoOpReaderWriter[EmptyCacheable])(nil)
 
 func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key any) T, forcePanics ...bool) *NoOpReaderWriter[T] {
@@ -67,124 +65,160 @@ func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key any) T, forcePanics 
 		panicOnWrite:       doPanics,
 		deadlockErrorCount: make(map[string]int),
 		deadlockRetries:    make(map[string]int),
-		SaveCallCount:      make(map[string]int64), // Initialize with int64 values
-		// FindCallCount, WarnCallCount, InfoCallCount are zero by default for int64
+		SaveCallCount:      make(map[string]int64),
 		WarnMessages:       make([]string, 0),
 		InfoMessages:       make([]string, 0),
 	}
 }
 
 func (rw *NoOpReaderWriter[T]) SetMockedItem(key string, item T) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.mockedItems[key] = item
 }
 
 func (rw *NoOpReaderWriter[T]) SetSucceedOnFind(key string, succeed bool) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.succeedOnFind[key] = succeed
 }
 
 func (rw *NoOpReaderWriter[T]) SetErrorOnSave(key string, err error) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.errorOnSave[key] = err
 }
 
 func (rw *NoOpReaderWriter[T]) SetBeginTxError(err error) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.beginTxError = err
 }
 
 func (rw *NoOpReaderWriter[T]) SetCommitTxPanic(panicFlag bool) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.commitTxPanic = panicFlag
 }
 
 func (rw *NoOpReaderWriter[T]) SimulateDeadlockOnSave(key string, retries int) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.deadlockRetries[key] = retries
-	// Ensure the error message contains "deadlock" for the cache logic to pick it up.
 	rw.errorOnSave[key] = errors.New("simulated deadlock error")
 }
 
 func (rw *NoOpReaderWriter[T]) SetPanicOnSaveKey(key string) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
 	rw.panicOnSaveKey = key
 }
+
+func (rw *NoOpReaderWriter[T]) SetPanicOnLoad(flag bool) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	rw.panicOnLoad = flag
+}
+
+func (rw *NoOpReaderWriter[T]) SetPanicOnWrite(flag bool) {
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	rw.panicOnWrite = flag
+}
+func (rw *NoOpReaderWriter[T]) SetPostSaveCallback(cb func(key string)){
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	rw.PostSaveCallback = cb
+}
+
 
 func (g *NoOpReaderWriter[T]) Find(key string, _ interface{}) (T, error) {
 	g.mu.Lock()
 	g.FindCallCount++
-	g.mu.Unlock()
-	if g.panicOnLoad {
+	// Reading panicOnLoad, succeedOnFind, mockedItems also needs protection if they can be modified concurrently by Setters.
+	// Current Setters have mutex, so reads here should be fine if setters are not called mid-operation by same test goroutine.
+	// However, for general safety, critical reads accessed by multiple methods should be protected.
+	panicOnLoad := g.panicOnLoad
+	succeed, specified := g.succeedOnFind[key]
+	var item T
+	var ok bool
+	if specified && succeed {
+		item, ok = g.mockedItems[key]
+	}
+	g.mu.Unlock() // Unlock after accessing shared fields
+
+	if panicOnLoad {
 		panic("test panic, read")
 	}
-	succeed, specified := g.succeedOnFind[key]
+
 	if specified && succeed {
-		item, ok := g.mockedItems[key]
 		if ok {
 			return item, nil
 		}
-		// If SetSucceedOnFind was true, but no item was mocked, return template (as if found but empty)
 		return g.getTemplateItem(key), nil
 	}
 	return g.getTemplateItem(key), errors.New("NoOp, item not found")
 }
 
 func (g *NoOpReaderWriter[T]) Save(item T, _ interface{}) error {
-	keyStr, ok := item.Key().(string)
-	if !ok {
-		// Fallback or error if key cannot be converted to string.
-		// This depends on how strictly test items adhere to string keys.
-		// For now, let's assume test keys will be strings.
+	keyStr, iok := item.Key().(string)
+	if !iok {
 		log.Printf("Warning: Item key is not a string in NoOpReaderWriter.Save for test setup. Key: %v", item.Key())
-		// Attempt to proceed if possible, or return an error
-		// For testing, it might be better to panic if the key isn't string,
-		// as it indicates a test setup issue.
 		panic("Item key is not a string in NoOpReaderWriter.Save for test setup")
 	}
 
+	g.mu.Lock()
+	// All checks and modifications of shared fields under one lock acquisition
 	if g.panicOnSaveKey != "" && keyStr == g.panicOnSaveKey {
+		g.mu.Unlock()
 		panic("test panic, write on specific key: " + keyStr)
 	}
-	if g.panicOnWrite { // Global panic if specific key not matched or not set
+	if g.panicOnWrite {
+		g.mu.Unlock()
 		panic("test panic, write")
 	}
 
-	g.mu.Lock()
 	g.SaveCallCount[keyStr]++
-	g.mu.Unlock()
-	// The duplicated block below was removed.
-	// if !ok {
-	// log.Printf("Warning: Item key is not a string in NoOpReaderWriter.Save for test setup. Key: %v", item.Key())
-	// panic("Item key is not a string in NoOpReaderWriter.Save for test setup")
-	// }
-	// g.SaveCallCount[keyStr]++ // this was the second increment, also removed.
 
 	if retries, active := g.deadlockRetries[keyStr]; active {
 		currentRetries := g.deadlockErrorCount[keyStr]
 		currentRetries++
 		g.deadlockErrorCount[keyStr] = currentRetries
 		if currentRetries <= retries {
-			// Return the error set by SimulateDeadlockOnSave, which should contain "deadlock"
-			return g.errorOnSave[keyStr]
+			errToRet := g.errorOnSave[keyStr]
+			g.mu.Unlock()
+			return errToRet
 		}
 		delete(g.deadlockRetries, keyStr)
-		// If deadlock was the only error for this key, remove it from errorOnSave too
-		// This logic assumes SimulateDeadlockOnSave sets errorOnSave.
 		if val, ok := g.errorOnSave[keyStr]; ok && val.Error() == "simulated deadlock error" {
 			delete(g.errorOnSave, keyStr)
 		}
-		// Successful save after retries
-		if g.PostSaveCallback != nil {
-			g.PostSaveCallback(keyStr)
+
+		cb := g.PostSaveCallback
+		g.mu.Unlock() // Unlock before callback
+		if cb != nil {
+			cb(keyStr)
 		}
 		return nil
 	}
 
 	if err, specified := g.errorOnSave[keyStr]; specified {
+		g.mu.Unlock()
 		return err
 	}
 
-	if g.PostSaveCallback != nil {
-		g.PostSaveCallback(keyStr)
+	cb := g.PostSaveCallback
+	g.mu.Unlock() // Unlock before callback
+
+	if cb != nil {
+		cb(keyStr)
 	}
 	return nil
 }
 
 func (g *NoOpReaderWriter[T]) BeginTx() (tx interface{}, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.beginTxError != nil {
 		return nil, g.beginTxError
 	}
@@ -192,6 +226,8 @@ func (g *NoOpReaderWriter[T]) BeginTx() (tx interface{}, err error) {
 }
 
 func (g *NoOpReaderWriter[T]) CommitTx(_ interface{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.commitTxPanic {
 		panic("mock CommitTx panic")
 	}
@@ -202,7 +238,6 @@ func (g *NoOpReaderWriter[T]) Info(msg string, _ string, _ ...T) {
 	g.InfoCallCount++
 	g.InfoMessages = append(g.InfoMessages, msg)
 	g.mu.Unlock()
-	// log.Print("[info] ", msg) // Original log.Print can be noisy for tests
 }
 
 func (g *NoOpReaderWriter[T]) Warn(msg string, _ string, _ ...T) {
@@ -210,10 +245,8 @@ func (g *NoOpReaderWriter[T]) Warn(msg string, _ string, _ ...T) {
 	g.WarnCallCount++
 	g.WarnMessages = append(g.WarnMessages, msg)
 	g.mu.Unlock()
-	// log.Print("[warn] ", msg) // Original log.Print can be noisy for tests
 }
 
-// Helper to reset call counts and messages for fresh assertions in tests
 func (rw *NoOpReaderWriter[T]) ResetCountersAndMessages() {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
@@ -223,5 +256,4 @@ func (rw *NoOpReaderWriter[T]) ResetCountersAndMessages() {
 	rw.WarnMessages = make([]string, 0)
 	rw.InfoCallCount = 0
 	rw.InfoMessages = make([]string, 0)
-	// Do not reset error configurations or mocked items by default
 }

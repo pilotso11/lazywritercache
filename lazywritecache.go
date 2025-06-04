@@ -157,10 +157,14 @@ func NewLazyWriterCacheWithContext[K comparable, T Cacheable](ctx context.Contex
 
 // Lock the cache. This will panic if the cache is already locked when the mutex is entered.
 func (c *LazyWriterCache[K, T]) Lock() error {
-	c.mutex.Lock()
+	// Attempt to set the atomic lock flag FIRST
 	if !c.locked.CompareAndSwap(false, true) {
+		// If CAS fails, it means it was already locked (or another goroutine just locked it).
+		// Return the error immediately WITHOUT acquiring c.mutex.
 		return ErrConcurrentModification
 	}
+	// If CAS was successful, THEN acquire the mutex.
+	c.mutex.Lock()
 	return nil
 }
 

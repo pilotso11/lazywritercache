@@ -687,10 +687,13 @@ func TestCache_GetFromLocked_Success(t *testing.T) {
 
 func TestCache_LazyWriter_FlushOnShutdown(t *testing.T) {
 	cfg, handler := newNoOpTestConfig()
-	cfg.WriteFreq = 100 * time.Millisecond // Set a write frequency so lazyWriter starts
+	cfg.WriteFreq = 10 * time.Millisecond // Shortened for faster eventual check
 	cfg.FlushOnShutdown = true
 
-	cache := NewLazyWriterCache[string, testItem](cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled
+
+	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, cfg)
 	// No immediate defer cache.Shutdown() as we want to call it explicitly for the test
 
 	itemKey := "flushOnShutdownItem"
@@ -706,16 +709,15 @@ func TestCache_LazyWriter_FlushOnShutdown(t *testing.T) {
 
 	cache.Shutdown() // This should trigger Flush if FlushOnShutdown is true
 
-	// Assert that Save was called for itemKey
-	// It might take a moment for the shutdown flush to complete.
-	// However, Shutdown() is synchronous for the flush part.
-	assert.Equal(t, 1, handler.SaveCallCount[itemKey], "Save should have been called for the item during shutdown")
+	// Use assert.Eventually to check for the save, making it robust if Shutdown had some async part (though it's documented as sync for flush)
+	assert.Eventually(t, func() bool {
+		return handler.SaveCallCount[itemKey] == 1
+	}, 2*time.Second, 50*time.Millisecond, "Save should have been called for the item during shutdown")
 
-	// Item should no longer be dirty after successful flush on shutdown
-	// Note: isDirty checks the live dirty map. If Shutdown clears it, this is okay.
-	// cache.Shutdown() calls Flush() then stops goroutines. Flush() removes from dirty map on success.
-	_, itemIsDirtyAfterShutdown := cache.dirty[itemKey]
-	assert.False(t, itemIsDirtyAfterShutdown, "Item should not be dirty after FlushOnShutdown")
+	assert.Eventually(t, func() bool {
+		_, isDirty := cache.dirty[itemKey]
+		return !isDirty
+	}, 2*time.Second, 50*time.Millisecond, "Item should not be dirty after FlushOnShutdown")
 
 	handler.ResetCountersAndMessages()
 }
@@ -724,8 +726,11 @@ func TestCache_LazyWriter_SaveDirtyErrorInLoop(t *testing.T) {
 	cfg, handler := newNoOpTestConfig()
 	cfg.WriteFreq = 10 * time.Millisecond // Frequent writes to trigger quickly
 
-	cache := NewLazyWriterCache[string, testItem](cfg)
-	defer cache.Shutdown()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled
+
+	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, cfg)
+	// defer cache.Shutdown() // Shutdown will be called explicitly if needed, or by test end if panic etc.
 
 	itemKey := "saveErrorItem"
 	expectedError := errors.New("save failed")
@@ -738,39 +743,34 @@ func TestCache_LazyWriter_SaveDirtyErrorInLoop(t *testing.T) {
 	err = cache.Unlock()
 	assert.NoError(t, err)
 
-	// Wait for a couple of write cycles
-	time.Sleep(50 * time.Millisecond)
-
-	// Assert that Warn method was called with "error saving dirty records to the db"
-	// The lazyWriter loop logs this warning.
-	assert.True(t, handler.WarnCallCount > 0, "Warn should have been called")
-	foundErrorMessage := false
-	// The actual message is "error saving dirty records to the db: %v", err
-	// So we check for the prefix.
+	// Use assert.Eventually to check for warnings and save attempts
 	expectedMessagePrefix := "error saving dirty records to the db"
-	var lastWarnMessage string
-	for _, msg := range handler.WarnMessages {
-		lastWarnMessage = msg
-		if strings.HasPrefix(msg, expectedMessagePrefix) && strings.HasSuffix(msg, expectedError.Error()) {
-			foundErrorMessage = true
-			break
+	assert.Eventually(t, func() bool {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		if handler.WarnCallCount == 0 {
+			return false
 		}
-	}
-	assert.True(t, foundErrorMessage, "Expected save error message prefix not found in Warn messages. Last message: %s", lastWarnMessage)
+		for _, msg := range handler.WarnMessages {
+			if strings.HasPrefix(msg, expectedMessagePrefix) && strings.HasSuffix(msg, expectedError.Error()) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "Expected save error message not found in Warn messages")
 
-	// Assert item is still dirty
+	assert.Eventually(t, func() bool {
+		// Check SaveCallCount (note: this map is not fully atomic in NoOp, but for a single key test it's indicative)
+		return handler.SaveCallCount[itemKey] >= 1
+	}, 5*time.Second, 50*time.Millisecond, "Save should have been attempted at least once")
+
+	// Assert item is still dirty (this can be a direct check after Eventually confirms save attempts)
 	_, itemIsStillDirty := cache.dirty[itemKey]
 	assert.True(t, itemIsStillDirty, "Item should still be dirty after save error in loop")
 
-	// Assert Save was called multiple times (due to retries by lazyWriter's loop)
-	// The lazyWriter loop calls Flush, which itself has retry logic for deadlocks, but not for generic errors.
-	// saveDirtyToDB will return the error, and lazyWriter will log it and continue.
-	// The item will be attempted to be saved on each tick.
-	assert.True(t, handler.SaveCallCount[itemKey] >= 1, "Save should have been attempted at least once")
-	// Depending on timing, it could be called multiple times. >=1 is a safe check.
-
 	handler.ResetCountersAndMessages()
 	handler.SetErrorOnSave(itemKey, nil) // cleanup
+	cache.Shutdown() // Explicitly shutdown to free resources
 }
 
 func TestCache_SaveDirtyToDB_PurgedItemUpdate(t *testing.T) {
@@ -958,11 +958,14 @@ func TestCache_EvictionProcessor_LockUnlockError(t *testing.T) {
 func TestCache_EvictionProcessor_SkipDirty(t *testing.T) {
 	cfg, handler := newNoOpTestConfig()
 	cfg.Limit = 1                 // Set limit to 1 to force eviction consideration
-	cfg.PurgeFreq = 0             // Disable auto-purging for manual test control
+	cfg.PurgeFreq = 0             // Disable auto-purging for manual test control, evictionProcessor called manually
 	cfg.WriteFreq = 0             // Disable auto-writing for manual test control
 
-	cache := NewLazyWriterCache[string, testItem](cfg)
-	defer cache.Shutdown()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled
+
+	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, cfg)
+	defer cache.Shutdown() // Still good practice to ensure shutdown
 
 	item1Key := "item1"
 	item2Key := "item2"

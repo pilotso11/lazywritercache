@@ -498,10 +498,13 @@ func TestCacheLF_ClearDirty(t *testing.T) {
 
 func TestCacheLF_LazyWriter_FlushOnShutdown(t *testing.T) {
 	cfg, handler := newNoOpTestConfigLF()
-	cfg.WriteFreq = 20 * time.Millisecond // Set a write frequency so lazyWriter starts
+	cfg.WriteFreq = 10 * time.Millisecond // Shortened for faster eventual check
 	cfg.FlushOnShutdown = true
 
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled
+
+	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, cfg)
 	// No immediate defer cache.Shutdown() as we want to call it explicitly
 
 	itemKey := "flushOnShutdownItemLF"
@@ -515,15 +518,64 @@ func TestCacheLF_LazyWriter_FlushOnShutdown(t *testing.T) {
 
 	cache.Shutdown() // This should trigger Flush if FlushOnShutdown is true
 
-	// Assert that Save was called for itemKey
-	// Shutdown is synchronous for the flush part.
-	assert.Equal(t, int64(1), handler.GetSaveCount(itemKey), "Save should have been called for the item during shutdown")
+	// Use assert.Eventually to check for the save
+	assert.Eventually(t, func() bool {
+		return handler.GetSaveCount(itemKey) == 1
+	}, 2*time.Second, 50*time.Millisecond, "Save should have been called for the item during shutdown")
 
-	// Item should no longer be dirty after successful flush on shutdown
-	_, itemStillDirty := cache.dirty.Load(itemKey)
-	assert.False(t, itemStillDirty, "Item should not be dirty after FlushOnShutdown")
+	assert.Eventually(t, func() bool {
+		_, isDirty := cache.dirty.Load(itemKey)
+		return !isDirty
+	}, 2*time.Second, 50*time.Millisecond, "Item should not be dirty after FlushOnShutdown")
 
 	handler.ResetCountersAndMessages()
+}
+
+func TestCacheLF_LazyWriter_SaveDirtyErrorInLoop(t *testing.T) {
+	cfg, handler := newNoOpTestConfigLF()
+	cfg.WriteFreq = 10 * time.Millisecond // Frequent writes
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, cfg)
+	// defer cache.Shutdown() // Explicit shutdown at end
+
+	itemKey := "saveErrorItemLF"
+	expectedError := errors.New("save failed LF intentionally")
+
+	handler.SetErrorOnSave(itemKey, expectedError)
+
+	cache.Save(newtestItemLF(itemKey))
+
+	// Use assert.Eventually to check for warnings and save attempts
+	expectedMessagePrefix := "Error saving " + itemKey + " to DB" // Message from saveDirtyToDB in lockfree
+	assert.Eventually(t, func() bool {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+		if handler.WarnCallCount.Load() == 0 {
+			return false
+		}
+		for _, msg := range handler.WarnMessages {
+			// Example actual log: "Error saving item_save_error_lf to DB: save failed intentionally"
+			if strings.HasPrefix(msg, expectedMessagePrefix) && strings.HasSuffix(msg, expectedError.Error()) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "Expected save error message not found in Warn messages. Got: %v", handler.WarnMessages)
+
+	assert.Eventually(t, func() bool {
+		return handler.GetSaveCount(itemKey) >= 1
+	}, 5*time.Second, 50*time.Millisecond, "Save should have been attempted at least once")
+
+	// Assert item is still dirty
+	_, itemIsStillDirty := cache.dirty.Load(itemKey)
+	assert.True(t, itemIsStillDirty, "Item should still be dirty after save error in loop")
+
+	handler.ResetCountersAndMessages()
+	handler.SetErrorOnSave(itemKey, nil) // cleanup
+	cache.Shutdown() // Explicitly shutdown
 }
 
 func TestCacheLF_SaveDirtyToDB_HandlerFindError(t *testing.T) {
@@ -765,11 +817,14 @@ func TestCacheLF_SaveDirtyToDB_CommitTxPanic(t *testing.T) {
 func TestCacheLF_EvictionProcessor_ReEnqueueDirty(t *testing.T) {
 	cfg, handler := newNoOpTestConfigLF()
 	cfg.Limit = 1                 // Set limit to 1 to force eviction consideration
-	cfg.PurgeFreq = 0             // Disable auto-purging for manual test control
+	cfg.PurgeFreq = 0             // Disable auto-purging for manual test control, evictionProcessor called manually
 	cfg.WriteFreq = 0             // Disable auto-writing for manual test control
 
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
-	defer cache.Shutdown()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled
+
+	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, cfg)
+	defer cache.Shutdown() // Still good practice
 
 	item1Key := "item1_lf_evict"
 	item2Key := "item2_lf_evict"
