@@ -21,8 +21,33 @@ jobs:
       with:
         go-version: 1.23
 
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
     - name: Build
       run: go build -v ./...
 
     - name: Test
-      run: go test -v ./...
+      run: go test -v -coverprofile=coverage.out ./...
+
+    - name: Generate coverage badge
+      run: go run github.com/axw/go-coverage-badge/cmd/go-coverage-badge@latest -o coverage.svg coverage.out
+
+    - name: Commit coverage badge
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add coverage.svg
+        # Check if there are changes to commit to avoid empty commits
+        if ! git diff --staged --quiet; then
+          git commit -m "Update coverage badge"
+          git push
+        else
+          echo "No changes to coverage badge."
+        fi
