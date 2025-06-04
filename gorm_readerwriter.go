@@ -123,7 +123,16 @@ func (g GormCacheReaderWriter[K, T]) CommitTx(tx any) {
 	if g.UseTransactions {
 		dbTx.Commit()
 	}
-	return
+	// return // Implicit return is fine for void functions
+}
+
+func (g GormCacheReaderWriter[K, T]) RollbackTx(tx any) {
+	if g.UseTransactions { // Only rollback if transactions are enabled and tx is likely a real transaction
+		if dbTx, ok := tx.(*gorm.DB); ok && dbTx != nil && dbTx != g.db { // ensure it's a transaction and not the base db
+			dbTx.Rollback()
+		}
+	}
+	// If not using transactions, or tx is nil/g.db, Rollback is a no-op
 }
 
 func (g GormCacheReaderWriter[K, T]) Info(msg string, action string, item ...T) {
