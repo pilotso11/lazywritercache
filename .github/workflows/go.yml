@@ -36,7 +36,9 @@ jobs:
       run: go test -v -coverprofile=coverage.out ./...
 
     - name: Generate coverage badge
-      run: go run github.com/axw/go-coverage-badge/cmd/go-coverage-badge@latest -o coverage.svg coverage.out
+      run: |
+        go install github.com/axw/go-coverage-badge/cmd/go-coverage-badge@latest
+        $(go env GOPATH)/bin/go-coverage-badge -o coverage.svg coverage.out
 
     - name: Commit coverage badge
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
