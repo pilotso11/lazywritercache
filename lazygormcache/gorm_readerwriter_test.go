@@ -1,4 +1,4 @@
-package gormcache
+package lazygormcache
 
 import (
 	"database/sql"
