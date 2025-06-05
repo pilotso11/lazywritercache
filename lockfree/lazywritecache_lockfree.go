@@ -30,9 +30,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/puzpuzpuz/xsync"
+
 	"github.com/pilotso11/lazywritercache"
 	"github.com/pilotso11/lazywritercache/lockfree/lockfreequeue"
-	"github.com/puzpuzpuz/xsync"
 )
 
 type CacheableLF interface {
@@ -152,9 +153,6 @@ func (c *LazyWriterCacheLF[T]) Load(key string) (T, bool) {
 }
 
 // Save updates an item in the cache.
-// The cache must already have been locked, if not we will panic.
-//
-// The expectation is GetAndLock has been called first, and an Unlock has been deferred.
 func (c *LazyWriterCacheLF[T]) Save(item T) {
 	c.Stores.Add(1)
 	c.cache.Store(item.Key(), item) // save in cache

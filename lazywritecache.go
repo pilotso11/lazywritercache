@@ -155,7 +155,8 @@ func NewLazyWriterCacheWithContext[K comparable, T Cacheable](ctx context.Contex
 	return &cache
 }
 
-// Lock the cache. This will panic if the cache is already locked when the mutex is entered.
+// Lock the cache. This will return an error if the cache is already locked when the mutex is entered.
+// This condition should never happen as even though locked is an atomic.bool it is only set inside the mutex.
 func (c *LazyWriterCache[K, T]) Lock() error {
 	c.mutex.Lock()
 	if !c.locked.CompareAndSwap(false, true) {
@@ -164,6 +165,10 @@ func (c *LazyWriterCache[K, T]) Lock() error {
 	return nil
 }
 
+// unlockWithPanic will panic with ErrConcurrentModification if the unlock fails because locked is already set.
+// In practice this should never happen, but it is included as a safe way to handle errors caused during
+// any deferred unlock.  Whether panic is appropriate is debatable, but this condition should never occurr
+// as locked, while atomic, is also protected inside the mutex.
 func (c *LazyWriterCache[K, T]) unlockWithPanic() {
 	err := c.Unlock()
 	if err != nil {
@@ -224,8 +229,9 @@ func (c *LazyWriterCache[K, T]) Save(item T) {
 	c.fifo = append(c.fifo, item.Key().(K)) // add to fifo queue
 }
 
-// Unlock the Lock.  It will panic if not already locked
+// Unlock the Lock.  It will return an error if not already locked.
 func (c *LazyWriterCache[K, T]) Unlock() error {
+	// locked should always be set here, but we check it just to be sure.
 	if !c.locked.CompareAndSwap(true, false) {
 		return ErrConcurrentModification
 	}
