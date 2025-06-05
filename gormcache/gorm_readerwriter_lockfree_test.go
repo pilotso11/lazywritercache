@@ -10,11 +10,38 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"github.com/pilotso11/lazywritercache"
+	"github.com/pilotso11/lazywritercache/lockfree"
 )
 
-// MockLogger implements the Logger interface for testing
-type MockLogger struct {
+// testDBItemLF implements the lockfree.CacheableLF interface for testing
+type testDBItemLF struct {
+	ID    uint `gorm:"primarykey"`
+	Value string
+}
+
+var testColumnsLF = []string{"id", "value"}
+
+func (i testDBItemLF) Key() string {
+	return i.Value
+}
+
+func (i testDBItemLF) CopyKeyDataFrom(from lockfree.CacheableLF) lockfree.CacheableLF {
+	i.Value = from.Key()
+	return i
+}
+
+func (i testDBItemLF) String() string {
+	return i.Value
+}
+
+func newTestDBItemLF(key string) testDBItemLF {
+	return testDBItemLF{
+		Value: key,
+	}
+}
+
+// MockLoggerLF implements the LoggerLF interface for testing
+type MockLoggerLF struct {
 	InfoCalled  bool
 	WarnCalled  bool
 	ErrorCalled bool
@@ -22,82 +49,25 @@ type MockLogger struct {
 	LastAction  string
 }
 
-func (m *MockLogger) Info(msg string, action string, item ...lazywritercache.Cacheable) {
+func (m *MockLoggerLF) Info(msg string, action string, item ...lockfree.CacheableLF) {
 	m.InfoCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLogger) Warn(msg string, action string, item ...lazywritercache.Cacheable) {
+func (m *MockLoggerLF) Warn(msg string, action string, item ...lockfree.CacheableLF) {
 	m.WarnCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLogger) Error(msg string, action string, item ...lazywritercache.Cacheable) {
+func (m *MockLoggerLF) Error(msg string, action string, item ...lockfree.CacheableLF) {
 	m.ErrorCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-type testDBItem struct {
-	ID    uint `gorm:"primarykey"`
-	Value string
-}
-
-var testColumns = []string{"id", "value"}
-
-func (i testDBItem) Key() interface{} {
-	return i.Value
-}
-
-func (i testDBItem) CopyKeyDataFrom(from lazywritercache.Cacheable) lazywritercache.Cacheable {
-	i.Value = from.Key().(string)
-	return i
-}
-func (i testDBItem) String() string {
-	return i.Value
-}
-
-func newTestDBItem(key string) testDBItem {
-	return testDBItem{
-		Value: key,
-	}
-}
-
-// TestItem is a struct with associations for testing PreloadAssociations
-type TestItem struct {
-	ID       uint `gorm:"primarykey"`
-	Value    string
-	Children []TestChild `gorm:"foreignKey:ParentID"`
-}
-
-type TestChild struct {
-	ID       uint `gorm:"primarykey"`
-	ParentID uint
-	Name     string
-}
-
-func (i TestItem) Key() interface{} {
-	return i.Value
-}
-
-func (i TestItem) CopyKeyDataFrom(from lazywritercache.Cacheable) lazywritercache.Cacheable {
-	i.Value = from.Key().(string)
-	return i
-}
-
-func (i TestItem) String() string {
-	return i.Value
-}
-
-func newTestItem(key string) TestItem {
-	return TestItem{
-		Value: key,
-	}
-}
-
-func TestNewReaderWriter(t *testing.T) {
+func TestNewGormCacheReaderWriteLF(t *testing.T) {
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -113,29 +83,17 @@ func TestNewReaderWriter(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	// Test creating a new ReaderWriter without logger
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	// Test creating a new ReaderWriteLF
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
 
-	// Verify the ReaderWriter was created correctly
+	// Verify the ReaderWriteLF was created correctly
 	assert.NotNil(t, rw.db, "DB should not be nil")
 	assert.NotNil(t, rw.getTemplateItem, "getTemplateItem should not be nil")
 	assert.True(t, rw.UseTransactions, "UseTransactions should be true by default")
-	assert.True(t, rw.PreloadAssociations, "PreloadAssociations should be true by default")
 	assert.Nil(t, rw.Logger, "Logger should be nil by default")
-
-	// Test creating a new ReaderWriter with logger
-	logger := &MockLogger{}
-	rwWithLogger := NewReaderWriter[string, testDBItem](gDB, newTestDBItem, logger)
-
-	// Verify the ReaderWriter was created correctly
-	assert.NotNil(t, rwWithLogger.db, "DB should not be nil")
-	assert.NotNil(t, rwWithLogger.getTemplateItem, "getTemplateItem should not be nil")
-	assert.True(t, rwWithLogger.UseTransactions, "UseTransactions should be true by default")
-	assert.True(t, rwWithLogger.PreloadAssociations, "PreloadAssociations should be true by default")
-	assert.Equal(t, logger, rwWithLogger.Logger, "Logger should be set correctly")
 }
 
-func TestReaderWriter_Find(t *testing.T) {
+func TestReaderWriteLF_Find(t *testing.T) {
 	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -152,12 +110,12 @@ func TestReaderWriter_Find(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Find with a successful query
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
 		WithArgs("item1", 1).
-		WillReturnRows(sqlmock.NewRows(testColumns).AddRow(1, "item1"))
+		WillReturnRows(sqlmock.NewRows(testColumnsLF).AddRow(1, "item1"))
 
 	item, err := rw.Find("item1", nil)
 	assert.NoError(t, err, "Find should not return an error")
@@ -165,16 +123,16 @@ func TestReaderWriter_Find(t *testing.T) {
 	assert.Equal(t, uint(1), item.ID, "Item ID should match")
 
 	// Test Find with a query that returns no rows
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
 		WithArgs("missing", 1).
-		WillReturnRows(sqlmock.NewRows(testColumns))
+		WillReturnRows(sqlmock.NewRows(testColumnsLF))
 
 	_, err = rw.Find("missing", nil)
 	assert.Error(t, err, "Find should return an error when no rows are found")
 	assert.Equal(t, "not found", err.Error(), "Error message should be 'not found'")
 
 	// Test Find with a query that returns an error
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
 		WithArgs("error", 1).
 		WillReturnError(sql.ErrConnDone)
 
@@ -185,9 +143,9 @@ func TestReaderWriter_Find(t *testing.T) {
 	// Test Find with a transaction
 	mock.ExpectBegin()
 	tx := gDB.Begin()
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
 		WithArgs("item2", 1).
-		WillReturnRows(sqlmock.NewRows(testColumns).AddRow(2, "item2"))
+		WillReturnRows(sqlmock.NewRows(testColumnsLF).AddRow(2, "item2"))
 
 	item, err = rw.Find("item2", tx)
 	assert.NoError(t, err, "Find should not return an error")
@@ -198,7 +156,7 @@ func TestReaderWriter_Find(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
 
-func TestReaderWriter_Find_PreloadAssociations(t *testing.T) {
+func TestReaderWriteLF_Save(t *testing.T) {
 	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -215,80 +173,30 @@ func TestReaderWriter_Find_PreloadAssociations(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	// Test with PreloadAssociations = true
-	rwPreload := NewReaderWriter[string, TestItem](gDB, newTestItem)
-	rwPreload.PreloadAssociations = true
-
-	// Mock the query with preloaded associations
-	mock.ExpectQuery(`SELECT * FROM "test_items" WHERE "test_items"."value" = $1 LIMIT $2`).
-		WithArgs("item1", 1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "value"}).AddRow(1, "item1"))
-
-	// Mock the query for preloading children
-	mock.ExpectQuery(`SELECT * FROM "test_children" WHERE "test_children"."parent_id" = $1`).
-		WithArgs(1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "parent_id", "name"}).
-			AddRow(1, 1, "child1").
-			AddRow(2, 1, "child2"))
-
-	_, err = rwPreload.Find("item1", nil)
-	assert.NoError(t, err, "Find with PreloadAssociations should not return an error")
-
-	// Test with PreloadAssociations = false
-	rwNoPreload := NewReaderWriter[string, TestItem](gDB, newTestItem)
-	rwNoPreload.PreloadAssociations = false
-
-	// Mock the query without preloaded associations
-	mock.ExpectQuery(`SELECT * FROM "test_items" WHERE "test_items"."value" = $1 LIMIT $2`).
-		WithArgs("item2", 1).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "value"}).AddRow(2, "item2"))
-
-	_, err = rwNoPreload.Find("item2", nil)
-	assert.NoError(t, err, "Find without PreloadAssociations should not return an error")
-
-	// Verify all expectations were met
-	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
-}
-
-func TestReaderWriter_Save(t *testing.T) {
-	// Create a mock database
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	if err != nil {
-		t.Fatalf("Error creating mock database: %v", err)
-	}
-	defer db.Close()
-
-	gDB, err := gorm.Open(postgres.New(postgres.Config{
-		Conn:       db,
-		DSN:        "mock",
-		DriverName: "postgres",
-	}), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Error creating gorm DB: %v", err)
-	}
-
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Save with a successful query
 	mock.ExpectBegin()
-	tx := gDB.Begin()
-	mock.ExpectQuery(`INSERT INTO "test_db_items" ("value") VALUES ($1) RETURNING "id"`).
+	// tx := gDB.Begin()
+	mock.ExpectQuery(`INSERT INTO "test_db_item_lves" ("value") VALUES ($1) RETURNING "id"`).
 		WithArgs("item1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectCommit()
 
-	item := newTestDBItem("item1")
-	err = rw.Save(item, tx)
+	item := newTestDBItemLF("item1")
+	err = rw.Save(item, gDB)
 	assert.NoError(t, err, "Save should not return an error")
 
 	// Test Save with a query that returns an error
 	mock.ExpectBegin()
-	tx = gDB.Begin()
-	mock.ExpectQuery(`INSERT INTO "test_db_items" ("value") VALUES ($1) RETURNING "id"`).
+	// tx = gDB.Begin()
+	mock.ExpectQuery(`INSERT INTO "test_db_item_lves" ("value") VALUES ($1) RETURNING "id"`).
 		WithArgs("error").
 		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
 
-	item = newTestDBItem("error")
-	err = rw.Save(item, tx)
+	item = newTestDBItemLF("error")
+	err = rw.Save(item, gDB)
 	assert.Error(t, err, "Save should return an error when the query fails")
 	assert.Equal(t, sql.ErrConnDone, err, "Error should be sql.ErrConnDone")
 
@@ -296,7 +204,7 @@ func TestReaderWriter_Save(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
 
-func TestReaderWriter_BeginTx(t *testing.T) {
+func TestReaderWriteLF_BeginTx(t *testing.T) {
 	// Create a mock database
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -313,7 +221,7 @@ func TestReaderWriter_BeginTx(t *testing.T) {
 	}
 
 	// Test BeginTx with UseTransactions = true
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 
@@ -332,7 +240,7 @@ func TestReaderWriter_BeginTx(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
 
-func TestReaderWriter_CommitTx(t *testing.T) {
+func TestReaderWriteLF_CommitTx(t *testing.T) {
 	// Create a mock database
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -349,7 +257,7 @@ func TestReaderWriter_CommitTx(t *testing.T) {
 	}
 
 	// Test CommitTx with UseTransactions = true
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 	mock.ExpectCommit()
@@ -366,7 +274,7 @@ func TestReaderWriter_CommitTx(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
 
-func TestReaderWriter_Info(t *testing.T) {
+func TestReaderWriteLF_Info(t *testing.T) {
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -383,8 +291,8 @@ func TestReaderWriter_Info(t *testing.T) {
 	}
 
 	// Test Info with a logger
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
-	logger := &MockLogger{}
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
 	// Test Info without an item
@@ -394,7 +302,7 @@ func TestReaderWriter_Info(t *testing.T) {
 	assert.Equal(t, "test action", logger.LastAction, "Action should match")
 
 	// Test Info with an item
-	item := newTestDBItem("item1")
+	item := newTestDBItemLF("item1")
 	rw.Info("test message with item", "test action with item", item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
@@ -405,7 +313,7 @@ func TestReaderWriter_Info(t *testing.T) {
 	// No assertion needed, just make sure it doesn't panic
 }
 
-func TestReaderWriter_Warn(t *testing.T) {
+func TestReaderWriteLF_Warn(t *testing.T) {
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -422,8 +330,8 @@ func TestReaderWriter_Warn(t *testing.T) {
 	}
 
 	// Test Warn with a logger
-	rw := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
-	logger := &MockLogger{}
+	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
 	// Test Warn without an item
@@ -433,7 +341,7 @@ func TestReaderWriter_Warn(t *testing.T) {
 	assert.Equal(t, "test action", logger.LastAction, "Action should match")
 
 	// Test Warn with an item
-	item := newTestDBItem("item1")
+	item := newTestDBItemLF("item1")
 	rw.Warn("test message with item", "test action with item", item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
@@ -444,55 +352,63 @@ func TestReaderWriter_Warn(t *testing.T) {
 	// No assertion needed, just make sure it doesn't panic
 }
 
-func TestGormReaderWriter(t *testing.T) {
+func TestGormReaderWriterLF_Integration(t *testing.T) {
+	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
+	defer db.Close()
+
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
 		DSN:        "mock",
 		DriverName: "postgres",
 	}), &gorm.Config{})
 	if err != nil {
-		t.Errorf("Error setting up gorm mock: %v", err)
-		t.Fail()
-		return
+		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	gormRW := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
-	cfg := lazywritercache.NewDefaultConfig[string, testDBItem](gormRW)
+	// Create a ReaderWriteLF
+	gormRW := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+
+	// Create a LazyWriterCacheLF
+	cfg := lockfree.NewDefaultConfigLF[testDBItemLF](gormRW)
 	cfg.WriteFreq = 100 * time.Millisecond
-	cache := lazywritercache.NewLazyWriterCache[string, testDBItem](cfg)
-	defer func(db *sql.DB) {
-		cache.Shutdown()
-		_ = db.Close()
-	}(db)
+	cache := lockfree.NewLazyWriterCacheLF[testDBItemLF](cfg)
+	defer cache.Shutdown()
 
-	// First dirty hit should return an empty item
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).WithArgs("item1", 1).WillReturnRows(sqlmock.NewRows(testColumns))
-	item1, ok, err := cache.GetAndRelease("item1")
-	assert.NoError(t, err)
-	assert.False(t, ok, "item should not be found")
+	// Test loading a non-existent item
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
+		WithArgs("item1", 1).
+		WillReturnRows(sqlmock.NewRows(testColumnsLF))
 
+	_, ok := cache.Load("item1")
+	assert.False(t, ok, "Item should not be found")
+
+	// Test saving and loading an item
+	item := testDBItemLF{Value: "item1"}
+	cache.Save(item)
+
+	// The item should be in the cache now
+	loadedItem, ok := cache.Load("item1")
+	assert.True(t, ok, "Item should be found")
+	assert.Equal(t, item.Value, loadedItem.Value, "Item value should match")
+
+	// Test that the lazy writer saves the item to the database
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT * FROM "test_db_items" WHERE "test_db_items"."value" = $1 LIMIT $2`).WithArgs("item1", 1).WillReturnRows(sqlmock.NewRows(testColumns))
-	mock.ExpectQuery(`INSERT INTO "test_db_items" ("value") VALUES ($1) RETURNING "id"`).WithArgs("item1").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
+		WithArgs("item1", 1).
+		WillReturnRows(sqlmock.NewRows(testColumnsLF))
+	mock.ExpectQuery(`INSERT INTO "test_db_item_lves" ("value") VALUES ($1) RETURNING "id"`).
+		WithArgs("item1").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 	mock.ExpectCommit()
-	item1.Value = "item1"
-	err = cache.Lock()
-	assert.NoError(t, err)
-	cache.Save(item1)
-	err = cache.Unlock()
-	assert.NoError(t, err)
-	assert.True(t, cache.IsDirty(), "Cache is dirty")
 
 	assert.Eventuallyf(t, func() bool {
 		return mock.ExpectationsWereMet() == nil
-	}, 200*time.Millisecond, time.Millisecond, "timeout")
+	}, 200*time.Millisecond, 10*time.Millisecond, "All expectations should be met within 200ms ")
 
-	err = cache.Lock()
-	assert.NoError(t, err)
-	err = cache.Unlock()
-	assert.NoError(t, err)
-	assert.False(t, cache.IsDirty(), "Cache is dirty")
-	assert.Nil(t, mock.ExpectationsWereMet(), "insert was raised")
-
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
