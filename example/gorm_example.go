@@ -27,6 +27,8 @@ import (
 	"math/rand"
 
 	"github.com/pilotso11/lazywritercache"
+	"github.com/pilotso11/lazywritercache/gormcache"
+
 	"github.com/xo/dburl"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -67,7 +69,7 @@ func main() {
 	}
 
 	// Create the cache
-	gormRW := lazywritercache.NewGormCacheReaderWriter[string, Person](db, NewEmptyPerson)
+	gormRW := gormcache.NewReaderWriter[string, Person](db, NewEmptyPerson)
 	cacheConfig := lazywritercache.NewDefaultConfig[string, Person](gormRW)
 	cache := lazywritercache.NewLazyWriterCache[string, Person](cacheConfig)
 	defer cache.Shutdown()

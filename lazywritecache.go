@@ -510,3 +510,10 @@ func (c *LazyWriterCache[K, T]) Invalidate() error {
 	c.fifo = make([]K, 0)
 	return nil
 }
+
+// IsDirty returns true if there are pending writes.
+func (c *LazyWriterCache[K, T]) IsDirty() bool {
+	_ = c.Lock()
+	defer c.unlockWithPanic()
+	return len(c.dirty) > 0
+}

@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) LF0LF3 Seth Osher
+// Copyright (c) 2023 Seth Osher
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -20,47 +20,66 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package lockfree
+package gormcache
 
 import (
 	"errors"
 	"log"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/pilotso11/lazywritercache"
 )
 
 // Logger is an interface that can be implemented to provide logging for the cache.
 // The default logger is log.Println
-type LoggerLF interface {
-	Info(msg string, action string, item ...CacheableLF)
-	Warn(msg string, action string, item ...CacheableLF)
-	Error(msg string, action string, item ...CacheableLF)
+type Logger interface {
+	Info(msg string, action string, item ...lazywritercache.Cacheable)
+	Warn(msg string, action string, item ...lazywritercache.Cacheable)
+	Error(msg string, action string, item ...lazywritercache.Cacheable)
 }
 
-// GormCacheReaderWriteLF is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
-// It's been tested with Postgres and Mysql.   UseTransactions should be set to true unless you have a really good reason not to.
+// ReaderWriter is the GORM implementation of the CacheReaderWriter.  It should work with any DB GORM supports.
+// It's been tested with Postgres and Mysql.
+//
+// UseTransactions should be set to true unless you have a strong reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
-type GormCacheReaderWriteLF[T CacheableLF] struct {
-	db              *gorm.DB
-	getTemplateItem func(key string) T
-	UseTransactions bool
-	Logger          LoggerLF
+//
+// If PreloadAssociations is true then calls to db.Find are implement as db.Preload(clause.Associations).Find which will cause
+// GORM to eagerly fetch any joined objects.
+type ReaderWriter[K comparable, T lazywritercache.Cacheable] struct {
+	db                  *gorm.DB
+	finderWhereClause   string
+	getTemplateItem     func(key K) T
+	UseTransactions     bool
+	PreloadAssociations bool
+	Logger              Logger
 }
 
 // Check interface is complete
-var _ CacheReaderWriterLF[EmptyCacheableLF] = (*GormCacheReaderWriteLF[EmptyCacheableLF])(nil)
+var _ lazywritercache.CacheReaderWriter[string, lazywritercache.EmptyCacheable] = (*ReaderWriter[string, lazywritercache.EmptyCacheable])(nil)
 
-// NewGormCacheReaderWriteLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
-func NewGormCacheReaderWriteLF[T CacheableLF](db *gorm.DB, itemTemplate func(key string) T) GormCacheReaderWriteLF[T] {
-	return GormCacheReaderWriteLF[T]{
-		db:              db,
-		getTemplateItem: itemTemplate,
-		UseTransactions: true,
+// NewReaderWriter creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item Cacheable to your type.
+// The itemTemplate function is used to create new items with only the key, which are then used by db.Find() to find your item by key.
+func NewReaderWriter[K comparable, T lazywritercache.Cacheable](db *gorm.DB, itemTemplate func(key K) T, logger ...Logger) ReaderWriter[K, T] {
+	var alternateLogger Logger
+	if len(logger) > 0 {
+		alternateLogger = logger[0]
+	} else {
+		alternateLogger = nil
+	}
+	return ReaderWriter[K, T]{
+		db:                  db,
+		getTemplateItem:     itemTemplate,
+		UseTransactions:     true,
+		PreloadAssociations: true,
+		Logger:              alternateLogger,
 	}
 }
 
-func (g GormCacheReaderWriteLF[T]) Find(key string, tx any) (T, error) {
+func (g ReaderWriter[K, T]) Find(key K, tx any) (T, error) {
 	var dbTx *gorm.DB
 	if tx == nil {
 		dbTx = g.db
@@ -70,7 +89,12 @@ func (g GormCacheReaderWriteLF[T]) Find(key string, tx any) (T, error) {
 
 	template := g.getTemplateItem(key)
 
-	res := dbTx.Limit(1).Find(&template, &template)
+	var res *gorm.DB
+	if g.PreloadAssociations {
+		res = dbTx.Limit(1).Preload(clause.Associations).Find(&template, &template)
+	} else {
+		res = dbTx.Limit(1).Find(&template, &template)
+	}
 
 	if res.Error != nil {
 		return template, res.Error
@@ -81,14 +105,14 @@ func (g GormCacheReaderWriteLF[T]) Find(key string, tx any) (T, error) {
 	return template, nil
 }
 
-func (g GormCacheReaderWriteLF[T]) Save(item T, tx any) error {
+func (g ReaderWriter[K, T]) Save(item T, tx any) error {
 	dbTx := tx.(*gorm.DB)
 	// Generics to the rescue!?
 	res := dbTx.Save(&item)
 	return res.Error
 }
 
-func (g GormCacheReaderWriteLF[T]) BeginTx() (tx any, err error) {
+func (g ReaderWriter[K, T]) BeginTx() (tx any, err error) {
 	if g.UseTransactions {
 		tx = g.db.Begin()
 		return tx, nil
@@ -96,7 +120,7 @@ func (g GormCacheReaderWriteLF[T]) BeginTx() (tx any, err error) {
 	return g.db, nil
 }
 
-func (g GormCacheReaderWriteLF[T]) CommitTx(tx any) {
+func (g ReaderWriter[K, T]) CommitTx(tx any) {
 	dbTx := tx.(*gorm.DB)
 	if g.UseTransactions {
 		dbTx.Commit()
@@ -104,7 +128,7 @@ func (g GormCacheReaderWriteLF[T]) CommitTx(tx any) {
 	return
 }
 
-func (g GormCacheReaderWriteLF[T]) Info(msg string, action string, item ...T) {
+func (g ReaderWriter[K, T]) Info(msg string, action string, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
 			g.Logger.Info(msg, action, item[0])
@@ -116,7 +140,7 @@ func (g GormCacheReaderWriteLF[T]) Info(msg string, action string, item ...T) {
 	}
 }
 
-func (g GormCacheReaderWriteLF[T]) Warn(msg string, action string, item ...T) {
+func (g ReaderWriter[K, T]) Warn(msg string, action string, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
 			g.Logger.Warn(msg, action, item[0])

@@ -1,4 +1,4 @@
-package lazywritercache
+package gormcache
 
 import (
 	"database/sql"
@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"github.com/pilotso11/lazywritercache"
 )
 
 type testDBItem struct {
@@ -22,7 +24,7 @@ func (i testDBItem) Key() interface{} {
 	return i.Value
 }
 
-func (i testDBItem) CopyKeyDataFrom(from Cacheable) Cacheable {
+func (i testDBItem) CopyKeyDataFrom(from lazywritercache.Cacheable) lazywritercache.Cacheable {
 	i.Value = from.Key().(string)
 	return i
 }
@@ -49,10 +51,10 @@ func TestGormReaderWriter(t *testing.T) {
 		return
 	}
 
-	gormRW := NewGormCacheReaderWriter[string, testDBItem](gDB, newTestDBItem)
-	cfg := NewDefaultConfig[string, testDBItem](gormRW)
+	gormRW := NewReaderWriter[string, testDBItem](gDB, newTestDBItem)
+	cfg := lazywritercache.NewDefaultConfig[string, testDBItem](gormRW)
 	cfg.WriteFreq = 100 * time.Millisecond
-	cache := NewLazyWriterCache[string, testDBItem](cfg)
+	cache := lazywritercache.NewLazyWriterCache[string, testDBItem](cfg)
 	defer func(db *sql.DB) {
 		cache.Shutdown()
 		_ = db.Close()
@@ -72,16 +74,16 @@ func TestGormReaderWriter(t *testing.T) {
 	err = cache.Lock()
 	assert.NoError(t, err)
 	cache.Save(item1)
-	assert.Equal(t, 1, len(cache.dirty), "Cache is dirty")
 	err = cache.Unlock()
 	assert.NoError(t, err)
+	assert.True(t, cache.IsDirty(), "Cache is dirty")
 
 	time.Sleep(1 * time.Second) // time to write the cache
 	err = cache.Lock()
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(cache.dirty), "Cache is dirty")
 	err = cache.Unlock()
 	assert.NoError(t, err)
+	assert.False(t, cache.IsDirty(), "Cache is dirty")
 	assert.Nil(t, mock.ExpectationsWereMet(), "insert was raised")
 
 }
