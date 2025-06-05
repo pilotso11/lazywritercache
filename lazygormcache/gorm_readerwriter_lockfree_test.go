@@ -84,7 +84,7 @@ func TestNewGormCacheReaderWriteLF(t *testing.T) {
 	}
 
 	// Test creating a new ReaderWriteLF
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Verify the ReaderWriteLF was created correctly
 	assert.NotNil(t, rw.db, "DB should not be nil")
@@ -110,7 +110,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Find with a successful query
 	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
@@ -173,7 +173,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Save with a successful query
 	mock.ExpectBegin()
@@ -221,7 +221,7 @@ func TestReaderWriteLF_BeginTx(t *testing.T) {
 	}
 
 	// Test BeginTx with UseTransactions = true
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 
@@ -257,7 +257,7 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	}
 
 	// Test CommitTx with UseTransactions = true
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 	mock.ExpectCommit()
@@ -291,7 +291,7 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	}
 
 	// Test Info with a logger
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
@@ -330,7 +330,7 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	}
 
 	// Test Warn with a logger
-	rw := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
@@ -370,7 +370,7 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 	}
 
 	// Create a ReaderWriteLF
-	gormRW := NewGormCacheReaderWriteLF[testDBItemLF](gDB, newTestDBItemLF)
+	gormRW := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Create a LazyWriterCacheLF
 	cfg := lockfree.NewDefaultConfigLF[testDBItemLF](gormRW)

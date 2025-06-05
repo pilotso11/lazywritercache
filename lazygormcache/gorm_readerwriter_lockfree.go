@@ -53,8 +53,8 @@ type ReaderWriteLF[T lockfree.CacheableLF] struct {
 // Check interface is complete
 var _ lockfree.CacheReaderWriterLF[lockfree.EmptyCacheableLF] = (*ReaderWriteLF[lockfree.EmptyCacheableLF])(nil)
 
-// NewGormCacheReaderWriteLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
-func NewGormCacheReaderWriteLF[T lockfree.CacheableLF](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[T] {
+// NewReaderWriterLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
+func NewReaderWriterLF[T lockfree.CacheableLF](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[T] {
 	return ReaderWriteLF[T]{
 		db:              db,
 		getTemplateItem: itemTemplate,
