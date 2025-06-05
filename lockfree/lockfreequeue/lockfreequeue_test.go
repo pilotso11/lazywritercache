@@ -98,7 +98,6 @@ func TestConcurrentOperations(t *testing.T) {
 		count++
 		if count > numGoroutines*numOperations {
 			t.Fatalf("Dequeued more items than expected: got %d, want %d", count, numGoroutines*numOperations)
-			break
 		}
 	}
 
@@ -163,8 +162,8 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 		assert.Equal(t, int64(numProducers*numItemsPerProducer), dequeued.Load(), "Should dequeue exactly the number of enqueued items: ")
 
 		return true
-	}, time.Second, time.Millisecond, "should complete in 200ms")
+	}, 200*time.Millisecond, time.Millisecond, "should complete in 200ms")
 
-	assert.Equal(t, int64(1), producersDone.Load(), "queued: %d, dequeued: %d, pdone: %d, cdone: %d",
+	assert.Equal(t, int64(1), producersDone.Load(), "queued: %d, dequeued: %d, pDone: %d, cDone: %d",
 		queued.Load(), dequeued.Load(), pDone.Load(), cDone.Load())
 }
