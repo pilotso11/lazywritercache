@@ -71,28 +71,27 @@ type Config[K comparable, T Cacheable] struct {
 	LookupOnMiss    bool // If true, a cache miss will query the DB, with associated performance hit!
 	WriteFreq       time.Duration
 	PurgeFreq       time.Duration
-	DeadlockLimit   int  // Number of times to retry a deadlock before giving up
 	SyncWrites      bool // Synchronize cache flush to storage, this is slower but can help with deadlock contention for some use cases, especially where multiple caches may be impacted by the same DB writes because of hooks
 	FlushOnShutdown bool // Flush the cache on shutdown
 }
 
 func NewDefaultConfig[K comparable, T Cacheable](handler CacheReaderWriter[K, T]) Config[K, T] {
 	return Config[K, T]{
-		handler:       handler,
-		Limit:         10000,
-		LookupOnMiss:  true,
-		WriteFreq:     500 * time.Millisecond,
-		PurgeFreq:     10 * time.Second,
-		DeadlockLimit: 5,
+		handler:      handler,
+		Limit:        10000,
+		LookupOnMiss: true,
+		WriteFreq:    500 * time.Millisecond,
+		PurgeFreq:    10 * time.Second,
 	}
 }
 
 type CacheStats struct {
-	Hits        atomic.Int64
-	Misses      atomic.Int64
-	Stores      atomic.Int64
-	Evictions   atomic.Int64
-	DirtyWrites atomic.Int64
+	Hits         atomic.Int64
+	Misses       atomic.Int64
+	Stores       atomic.Int64
+	Evictions    atomic.Int64
+	DirtyWrites  atomic.Int64
+	FailedWrites atomic.Int64
 }
 
 func (s *CacheStats) String() string {
@@ -243,7 +242,7 @@ func (c *LazyWriterCache[K, T]) Unlock() error {
 // The cache is locked during the copy operations
 // The cache objects to be written are copied to the returned list, not their pointers
 func (c *LazyWriterCache[K, T]) getDirtyRecords() (dirty []Cacheable, err error) {
-	if err := c.Lock(); err != nil {
+	if err = c.Lock(); err != nil {
 		return nil, err
 	}
 	defer c.unlockWithPanic()
@@ -304,10 +303,9 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 
 		// Save back the merged item
 		err = c.handler.Save(item.(T), tx)
-		c.DirtyWrites.Add(1)
 
 		if err != nil {
-			if strings.Contains(err.Error(), "deadlock") {
+			if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
 				c.handler.Info(fmt.Sprintf("Deadlock detected, retrying %v", item.Key()), "write", item.(T))
 				// Put the items back in the dirty queue
 				for _, dirty := range dirty {
@@ -323,8 +321,10 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 				strVal = toStr.Call([]reflect.Value{})[0].String()
 			}
 			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v (%v)", old.Key(), err, strVal), "write", item.(T))
+			c.FailedWrites.Add(1)
 			return // don't update cache
 		}
+		c.DirtyWrites.Add(1)
 
 		// Briefly lock the cache and update it with the merged data.
 		// As we have not held the lock during the DB update, there is a race condition where a

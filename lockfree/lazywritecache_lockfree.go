@@ -207,13 +207,13 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 
 		// Save back the merged item
 		err = c.handler.Save(item, tx)
-		c.DirtyWrites.Add(1)
 
 		if err != nil {
 			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err), "write-dirty", item)
 			fail++
 			return true // don't update cache, move to next item
 		}
+		c.DirtyWrites.Add(1)
 
 		// Briefly lock the cache and update it with the merged data.
 		// As we have not held the lock during the DB update, there is a race condition where a
