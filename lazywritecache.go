@@ -71,28 +71,27 @@ type Config[K comparable, T Cacheable] struct {
 	LookupOnMiss    bool // If true, a cache miss will query the DB, with associated performance hit!
 	WriteFreq       time.Duration
 	PurgeFreq       time.Duration
-	DeadlockLimit   int  // Number of times to retry a deadlock before giving up
 	SyncWrites      bool // Synchronize cache flush to storage, this is slower but can help with deadlock contention for some use cases, especially where multiple caches may be impacted by the same DB writes because of hooks
 	FlushOnShutdown bool // Flush the cache on shutdown
 }
 
 func NewDefaultConfig[K comparable, T Cacheable](handler CacheReaderWriter[K, T]) Config[K, T] {
 	return Config[K, T]{
-		handler:       handler,
-		Limit:         10000,
-		LookupOnMiss:  true,
-		WriteFreq:     500 * time.Millisecond,
-		PurgeFreq:     10 * time.Second,
-		DeadlockLimit: 5,
+		handler:      handler,
+		Limit:        10000,
+		LookupOnMiss: true,
+		WriteFreq:    500 * time.Millisecond,
+		PurgeFreq:    10 * time.Second,
 	}
 }
 
 type CacheStats struct {
-	Hits        atomic.Int64
-	Misses      atomic.Int64
-	Stores      atomic.Int64
-	Evictions   atomic.Int64
-	DirtyWrites atomic.Int64
+	Hits         atomic.Int64
+	Misses       atomic.Int64
+	Stores       atomic.Int64
+	Evictions    atomic.Int64
+	DirtyWrites  atomic.Int64
+	FailedWrites atomic.Int64
 }
 
 func (s *CacheStats) String() string {
@@ -155,7 +154,8 @@ func NewLazyWriterCacheWithContext[K comparable, T Cacheable](ctx context.Contex
 	return &cache
 }
 
-// Lock the cache. This will panic if the cache is already locked when the mutex is entered.
+// Lock the cache. This will return an error if the cache is already locked when the mutex is entered.
+// This condition should never happen as even though locked is an atomic.bool it is only set inside the mutex.
 func (c *LazyWriterCache[K, T]) Lock() error {
 	c.mutex.Lock()
 	if !c.locked.CompareAndSwap(false, true) {
@@ -164,6 +164,10 @@ func (c *LazyWriterCache[K, T]) Lock() error {
 	return nil
 }
 
+// unlockWithPanic will panic with ErrConcurrentModification if the unlock fails because locked is already set.
+// In practice this should never happen, but it is included as a safe way to handle errors caused during
+// any deferred unlock.  Whether panic is appropriate is debatable, but this condition should never occurr
+// as locked, while atomic, is also protected inside the mutex.
 func (c *LazyWriterCache[K, T]) unlockWithPanic() {
 	err := c.Unlock()
 	if err != nil {
@@ -224,8 +228,9 @@ func (c *LazyWriterCache[K, T]) Save(item T) {
 	c.fifo = append(c.fifo, item.Key().(K)) // add to fifo queue
 }
 
-// Unlock the Lock.  It will panic if not already locked
+// Unlock the Lock.  It will return an error if not already locked.
 func (c *LazyWriterCache[K, T]) Unlock() error {
+	// locked should always be set here, but we check it just to be sure.
 	if !c.locked.CompareAndSwap(true, false) {
 		return ErrConcurrentModification
 	}
@@ -237,7 +242,7 @@ func (c *LazyWriterCache[K, T]) Unlock() error {
 // The cache is locked during the copy operations
 // The cache objects to be written are copied to the returned list, not their pointers
 func (c *LazyWriterCache[K, T]) getDirtyRecords() (dirty []Cacheable, err error) {
-	if err := c.Lock(); err != nil {
+	if err = c.Lock(); err != nil {
 		return nil, err
 	}
 	defer c.unlockWithPanic()
@@ -266,7 +271,6 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 
 	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", len(dirty)), "dirty-write")
 	success := 0
-	fail := 0
 
 	// Catch any panics
 	defer func() {
@@ -299,16 +303,14 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 
 		// Save back the merged item
 		err = c.handler.Save(item.(T), tx)
-		c.DirtyWrites.Add(1)
 
 		if err != nil {
-			if strings.Contains(err.Error(), "deadlock") {
+			if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
 				c.handler.Info(fmt.Sprintf("Deadlock detected, retrying %v", item.Key()), "write", item.(T))
 				// Put the items back in the dirty queue
 				for _, dirty := range dirty {
 					c.dirty[dirty.Key().(K)] = true
 				}
-				fail++
 				return
 			}
 			// Otherwise just report the error
@@ -319,9 +321,10 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 				strVal = toStr.Call([]reflect.Value{})[0].String()
 			}
 			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v (%v)", old.Key(), err, strVal), "write", item.(T))
-			fail++
+			c.FailedWrites.Add(1)
 			return // don't update cache
 		}
+		c.DirtyWrites.Add(1)
 
 		// Briefly lock the cache and update it with the merged data.
 		// As we have not held the lock during the DB update, there is a race condition where a
@@ -343,11 +346,7 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 		success++
 	}
 
-	if fail > 0 {
-		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "dirty-write")
-	} else {
-		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
-	}
+	c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
 	return
 }
 
@@ -503,4 +502,11 @@ func (c *LazyWriterCache[K, T]) Invalidate() error {
 	c.cache = make(map[K]T)
 	c.fifo = make([]K, 0)
 	return nil
+}
+
+// IsDirty returns true if there are pending writes.
+func (c *LazyWriterCache[K, T]) IsDirty() bool {
+	_ = c.Lock()
+	defer c.unlockWithPanic()
+	return len(c.dirty) > 0
 }
