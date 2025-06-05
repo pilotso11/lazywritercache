@@ -89,9 +89,11 @@ func (q *LockFreeQueue[T]) Dequeue() (val T) {
 		}
 	}
 }
+
 func load[T any](p *unsafe.Pointer) (n *node[T]) {
 	return (*node[T])(atomic.LoadPointer(p))
 }
+
 func cas[T any](p *unsafe.Pointer, old, new *node[T]) (ok bool) {
 	return atomic.CompareAndSwapPointer(
 		p, unsafe.Pointer(old), unsafe.Pointer(new))
