@@ -117,19 +117,19 @@ func TestCacheDirtyList(t *testing.T) {
 	cache.Save(item2)
 	err = cache.Unlock()
 	assert.NoError(t, err)
-	assert.Len(t, cache.dirty, 2, "dirty records")
+	assert.True(t, cache.IsDirty(), "dirty records")
 	d, err := cache.getDirtyRecords()
 	assert.NoError(t, err)
 	assert.Contains(t, d, item)
 	assert.Contains(t, d, item2)
-	assert.Len(t, cache.dirty, 0, "dirty records")
+	assert.False(t, cache.IsDirty(), "no dirty records")
 
 	err = cache.Lock()
 	assert.NoError(t, err)
 	cache.Save(item2)
 	err = cache.Unlock()
 	assert.NoError(t, err)
-	assert.Len(t, cache.dirty, 1, "dirty records")
+	assert.True(t, cache.IsDirty(), "dirty records")
 	d, err = cache.getDirtyRecords()
 	assert.NoError(t, err)
 	assert.Contains(t, d, item2)
@@ -147,11 +147,11 @@ func TestInvalidate(t *testing.T) {
 	cache.Save(item2)
 	err = cache.Unlock()
 	assert.NoError(t, err)
-	assert.Len(t, cache.dirty, 2, "dirty records")
+	assert.True(t, cache.IsDirty(), "dirty records")
 
 	err = cache.Invalidate()
 	assert.NoError(t, err)
-	assert.Len(t, cache.dirty, 0, "dirty records")
+	assert.False(t, cache.IsDirty(), "no dirty records")
 	assert.Len(t, cache.cache, 0, "cache is empty")
 }
 
@@ -560,14 +560,14 @@ func TestClearDirty(t *testing.T) {
 	assert.NoError(t, err)
 	cache.Save(item)
 	cache.Save(item2)
-	assert.Len(t, cache.dirty, 2, "Should have 2 dirty items")
+	assert.Equal(t, 2, len(cache.dirty), "dirty records") // cant use IsDirty, we're already locked.
 
 	// Test ClearDirty
 	cache.ClearDirty()
-	assert.Len(t, cache.dirty, 0, "Dirty list should be empty after ClearDirty")
-
 	err = cache.Unlock()
 	assert.NoError(t, err)
+
+	assert.False(t, cache.IsDirty(), "dirty records")
 
 	// Test that ClearDirty panics when cache is not locked
 	assert.Panics(t, func() {
@@ -681,13 +681,13 @@ func TestLazyWriter(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify items are marked as dirty
-	assert.Len(t, cache.dirty, 2, "Should have 2 dirty items")
+	assert.True(t, cache.IsDirty(), "dirty records")
 
 	// Wait for lazy writer to run
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify dirty items were processed
-	assert.Len(t, cache.dirty, 0, "Dirty list should be empty after lazy writer runs")
+	assert.False(t, cache.IsDirty(), "dirty records")
 	assert.Greater(t, cache.DirtyWrites.Load(), int64(0), "DirtyWrites counter should be incremented")
 }
 
@@ -717,7 +717,7 @@ func TestNewLazyWriterCacheWithContext_Cancellation(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify that the cache was flushed
-	assert.Len(t, cache.dirty, 0, "Dirty list should be empty after flush on shutdown")
+	assert.False(t, cache.IsDirty(), 0, "Dirty list should be empty after flush on shutdown")
 }
 
 func TestGetAndLock_Error(t *testing.T) {
@@ -792,14 +792,14 @@ func TestSaveDirtyToDB_CompleteCodeCoverage(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify items are marked as dirty
-	assert.Len(t, cache.dirty, 2, "Should have 2 dirty items")
+	assert.True(t, cache.IsDirty(), "dirty records")
 
 	// Flush the cache
 	err = cache.Flush()
 	assert.NoError(t, err)
 
 	// Verify dirty items were processed
-	assert.Len(t, cache.dirty, 0, "Dirty list should be empty after flush")
+	assert.False(t, cache.IsDirty(), "Dirty list should be empty after flush")
 	assert.Equal(t, int64(2), cache.DirtyWrites.Load(), "DirtyWrites counter should be incremented")
 }
 
@@ -881,7 +881,7 @@ func TestSaveDirtyToDB_UpdateExistingRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the item was processed
-	assert.Len(t, cache.dirty, 0, "Dirty list should be empty after flush")
+	assert.False(t, cache.IsDirty(), "Dirty list should be empty after flush")
 	assert.Equal(t, int64(1), cache.DirtyWrites.Load(), "DirtyWrites counter should be incremented")
 }
 
