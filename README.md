@@ -1,5 +1,5 @@
 # In memory GOLANG Lazy Writer Cache  
-![Coverage](https://img.shields.io/badge/Coverage-54.1%25-yellow)
+![Coverage](https://img.shields.io/badge/Coverage-65.8%25-yellow)
 A lazy writer cache is useful in situations where you don't want to block a low latency operation 
 with something expensive, such as a database write, but you want the consistency of a single version 
 of truth if you need to look for the object again.   A simple goroutine spun off write satisfies the first
