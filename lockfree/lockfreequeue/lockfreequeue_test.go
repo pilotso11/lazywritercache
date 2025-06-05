@@ -111,47 +111,47 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 
 	var queued, dequeued, pDone, cDone, producersDone atomic.Int64
 
-	assert.Eventuallyf(t, func() bool {
-		q := NewLockFreeQueue[int]()
-		const numProducers = 4
-		const numConsumers = 4
-		const numItemsPerProducer = 1000
+	q := NewLockFreeQueue[int]()
+	const numProducers = 4
+	const numConsumers = 4
+	const numItemsPerProducer = 1000
 
-		// Start producer goroutines
-		producerWg.Add(numProducers)
-		for i := 0; i < numProducers; i++ {
-			go func(id int) {
-				defer producerWg.Done()
-				defer pDone.Add(1)
-				for j := 0; j < numItemsPerProducer; j++ {
-					// Enqueue items with a unique value
-					q.Enqueue(id*numItemsPerProducer + j + 1) // +1 to avoid zero values
-					queued.Add(1)
-				}
-			}(i)
-		}
+	// Start producer goroutines
+	producerWg.Add(numProducers)
+	for i := 0; i < numProducers; i++ {
+		go func(id int) {
+			defer producerWg.Done()
+			defer pDone.Add(1)
+			for j := 0; j < numItemsPerProducer; j++ {
+				// Enqueue items with a unique value
+				q.Enqueue(id*numItemsPerProducer + j + 1) // +1 to avoid zero values
+				queued.Add(1)
+			}
+		}(i)
+	}
 
-		// Start consumer goroutines
-		consumerWg.Add(numConsumers)
-		for i := 0; i < numConsumers; i++ {
-			go func() {
-				defer consumerWg.Done()
-				defer cDone.Add(1)
-				for {
-					val := q.Dequeue()
-					if val != 0 {
-						dequeued.Add(1)
-					} else {
-						if producersDone.Load() == 1 {
-							return
-						}
-						time.Sleep(time.Millisecond) // pause for a bit and check again
+	// Start consumer goroutines
+	consumerWg.Add(numConsumers)
+	for i := 0; i < numConsumers; i++ {
+		go func() {
+			defer consumerWg.Done()
+			defer cDone.Add(1)
+			for {
+				val := q.Dequeue()
+				if val != 0 {
+					dequeued.Add(1)
+				} else {
+					if producersDone.Load() == 1 {
+						return
 					}
+					time.Sleep(time.Millisecond) // pause for a bit and check again
 				}
-			}()
-		}
+			}
+		}()
+	}
 
-		time.Sleep(100 * time.Millisecond)
+	var completed atomic.Int64
+	go func() {
 		// Wait for producers to finish
 		producerWg.Wait()
 		producersDone.Store(1)
@@ -159,11 +159,14 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 		// Wait for consumers to finish
 		consumerWg.Wait()
 
-		assert.Equal(t, int64(numProducers*numItemsPerProducer), dequeued.Load(), "Should dequeue exactly the number of enqueued items: ")
+		completed.Store(1)
+	}()
 
-		return true
+	assert.Eventuallyf(t, func() bool {
+		return completed.Load() == 1
 	}, 200*time.Millisecond, time.Millisecond, "should complete in 200ms")
 
+	assert.Equal(t, int64(numProducers*numItemsPerProducer), dequeued.Load(), "Should dequeue exactly the number of enqueued items: ")
 	assert.Equal(t, int64(1), producersDone.Load(), "queued: %d, dequeued: %d, pDone: %d, cDone: %d",
 		queued.Load(), dequeued.Load(), pDone.Load(), cDone.Load())
 }
