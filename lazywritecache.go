@@ -272,7 +272,6 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 
 	c.handler.Info(fmt.Sprintf("Found %d dirty records to write to the DB", len(dirty)), "dirty-write")
 	success := 0
-	fail := 0
 
 	// Catch any panics
 	defer func() {
@@ -314,7 +313,6 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 				for _, dirty := range dirty {
 					c.dirty[dirty.Key().(K)] = true
 				}
-				fail++
 				return
 			}
 			// Otherwise just report the error
@@ -325,7 +323,6 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 				strVal = toStr.Call([]reflect.Value{})[0].String()
 			}
 			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v (%v)", old.Key(), err, strVal), "write", item.(T))
-			fail++
 			return // don't update cache
 		}
 
@@ -349,11 +346,7 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 		success++
 	}
 
-	if fail > 0 {
-		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "dirty-write")
-	} else {
-		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
-	}
+	c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
 	return
 }
 
