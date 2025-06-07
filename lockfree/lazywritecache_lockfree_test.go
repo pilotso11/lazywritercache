@@ -164,6 +164,13 @@ func BenchmarkParallel_x10_CacheRead20kLF(b *testing.B) {
 	parallelRun(b, cacheSize, nThreads)
 }
 
+func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
+	cacheSize := 20000
+	nThreads := 20
+
+	parallelRun(b, cacheSize, nThreads)
+}
+
 func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
 	defer cache.Shutdown()

@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,7 +60,8 @@ type CacheReaderWriter[K comparable, T Cacheable] interface {
 	Find(key K, tx any) (T, error)
 	Save(item T, tx any) error
 	BeginTx() (tx any, err error)
-	CommitTx(tx any)
+	CommitTx(tx any) error
+	RollbackTx(tx any) error
 	Info(msg string, action string, item ...T)
 	Warn(msg string, action string, item ...T)
 }
@@ -253,7 +254,20 @@ func (c *LazyWriterCache[K, T]) getDirtyRecords() (dirty []Cacheable, err error)
 	return dirty, nil
 }
 
+func (c *LazyWriterCache[K, T]) putBackRecords(dirty []Cacheable) error {
+	if err := c.Lock(); err != nil {
+		return err
+	}
+	defer c.unlockWithPanic()
+	for _, k := range dirty {
+		c.dirty[k.Key().(K)] = true
+	}
+	return nil
+}
+
 var globalWriterLock sync.Mutex
+
+var ErrPanicDuringWrite = errors.New("panic recovered from during write")
 
 // Go routine to Save the dirty records to the DB, this is the lazy writer
 func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
@@ -285,10 +299,10 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 	// even though it holds the lock on the DB side longer.
 	tx, err := c.handler.BeginTx()
 	if err != nil {
-		return
+		c.handler.Warn(fmt.Sprintf("Recoverable error with BeginTx, batch will be retried: %v", err), "dirty-write")
+		_ = c.putBackRecords(dirty)
+		return err
 	}
-	// Ensure the commit runs
-	defer c.handler.CommitTx(tx)
 
 	for _, item := range dirty {
 		// Load the item from the DB.
@@ -308,21 +322,32 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 			if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
 				c.handler.Info(fmt.Sprintf("Deadlock detected, retrying %v", item.Key()), "write", item.(T))
 				// Put the items back in the dirty queue
-				for _, dirty := range dirty {
-					c.dirty[dirty.Key().(K)] = true
+				_ = c.putBackRecords(dirty)
+				err2 := c.handler.RollbackTx(tx)
+				if err2 != nil {
+					c.handler.Warn(fmt.Sprintf("Error rolling back transaction: %v", err2), "write")
+					return errors.Join(err2, err)
 				}
-				return
+				return err
 			}
+
 			// Otherwise just report the error
-			val := reflect.ValueOf(item)
-			toStr := val.MethodByName("String")
-			strVal := ""
-			if toStr.IsValid() {
-				strVal = toStr.Call([]reflect.Value{})[0].String()
-			}
-			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v (%v)", old.Key(), err, strVal), "write", item.(T))
+			c.handler.Warn(fmt.Sprintf("Error saving %v to DB: %v", old.Key(), err), "write", item.(T))
 			c.FailedWrites.Add(1)
-			return // don't update cache
+
+			// Put back all items except this oee
+			dirty = slices.DeleteFunc(dirty, func(i Cacheable) bool {
+				return i.Key().(K) == item.Key().(K)
+			})
+
+			_ = c.putBackRecords(dirty)
+
+			err2 := c.handler.RollbackTx(tx)
+			if err2 != nil {
+				c.handler.Warn(fmt.Sprintf("Error rolling back transaction %q", err2.Error()), "write")
+				return errors.Join(err, err2)
+			}
+			return err
 		}
 		c.DirtyWrites.Add(1)
 
@@ -345,9 +370,19 @@ func (c *LazyWriterCache[K, T]) saveDirtyToDB() (err error) {
 		}()
 		success++
 	}
+	if err = c.handler.CommitTx(tx); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
+			c.handler.Info("Deadlock detected during commit, retrying batch", "write")
+			// Put the items back in the dirty queue
+			_ = c.putBackRecords(dirty)
+			return err
+		}
+		c.handler.Info(fmt.Sprintf("Error during commit %q, batch will be lost", err.Error()), "write")
+
+	}
 
 	c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "dirty-write")
-	return
+	return nil
 }
 
 // ClearDirty forcefully empties the dirty queue, for example if the cache has just been forcefully loaded from the db, and

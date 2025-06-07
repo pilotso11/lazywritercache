@@ -120,12 +120,20 @@ func (g ReaderWriter[K, T]) BeginTx() (tx any, err error) {
 	return g.db, nil
 }
 
-func (g ReaderWriter[K, T]) CommitTx(tx any) {
+func (g ReaderWriter[K, T]) CommitTx(tx any) error {
 	dbTx := tx.(*gorm.DB)
 	if g.UseTransactions {
-		dbTx.Commit()
+		return dbTx.Commit().Error
 	}
-	return
+	return nil
+}
+
+func (g ReaderWriter[K, T]) RollbackTx(tx any) error {
+	dbTx := tx.(*gorm.DB)
+	if g.UseTransactions {
+		return dbTx.Rollback().Error
+	}
+	return nil
 }
 
 func (g ReaderWriter[K, T]) Info(msg string, action string, item ...T) {

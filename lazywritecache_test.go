@@ -59,21 +59,21 @@ func newTestItem(key interface{}) testItem {
 	}
 }
 
-func newNoOpTestConfig(panics ...bool) Config[string, testItem] {
-	doPanics := len(panics) > 0 && panics[0]
-	readerWriter := NewNoOpReaderWriter[testItem](newTestItem, doPanics)
+func newNoOpTestConfig() (Config[string, testItem], NoOpReaderWriter[testItem]) {
+	readerWriter := NewNoOpReaderWriter[testItem](newTestItem)
 	return Config[string, testItem]{
 		handler:      readerWriter,
 		Limit:        1000,
 		LookupOnMiss: false,
 		WriteFreq:    0,
 		PurgeFreq:    0,
-	}
+	}, readerWriter
 }
 func TestCacheStoreLoad(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -108,7 +108,8 @@ func TestCacheStoreLoad(t *testing.T) {
 func TestCacheDirtyList(t *testing.T) {
 	item := testItem{id: "test11"}
 	item2 := testItem{id: "test22"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -138,7 +139,8 @@ func TestCacheDirtyList(t *testing.T) {
 func TestInvalidate(t *testing.T) {
 	item := testItem{id: "test11"}
 	item2 := testItem{id: "test22"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -155,8 +157,31 @@ func TestInvalidate(t *testing.T) {
 	assert.Len(t, cache.cache, 0, "cache is empty")
 }
 
+func TestErrorDUringInvalidate(t *testing.T) {
+	item := testItem{id: "test11"}
+	item2 := testItem{id: "test22"}
+	cfg, handler := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(item)
+	cache.Save(item2)
+	err = cache.Unlock()
+	assert.NoError(t, err)
+	assert.True(t, cache.IsDirty(), "dirty records")
+
+	handler.errorOnNext.Store("save duplicate")
+	err = cache.Invalidate()
+	assert.Error(t, err)
+	assert.True(t, cache.IsDirty(), "dirty records - invalidate failed")
+	assert.Len(t, cache.cache, 2, "cache is not empty")
+}
+
 func TestCacheLockUnlockNoPanics(t *testing.T) {
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	assert.NotPanics(t, func() {
@@ -188,7 +213,8 @@ func TestCacheLockUnlockNoPanics(t *testing.T) {
 }
 
 func TestCachePanicOnBadLockState(t *testing.T) {
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	assert.Falsef(t, cache.locked.Load(), "cache us unlocked")
@@ -240,8 +266,16 @@ func BenchmarkParallel_x10_CacheRead20k(b *testing.B) {
 	parallelRun(b, cacheSize, nThreads)
 }
 
+func BenchmarkParallel_x20_CacheRead20k(b *testing.B) {
+	cacheSize := 20000
+	nThreads := 20
+
+	parallelRun(b, cacheSize, nThreads)
+}
+
 func parallelRun(b *testing.B, cacheSize int, nThreads int) {
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	var keys []string
@@ -277,7 +311,8 @@ func parallelRun(b *testing.B, cacheSize int, nThreads int) {
 }
 
 func cacheWrite(b *testing.B, cacheSize int) {
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	for i := 0; i < b.N; i++ {
@@ -294,7 +329,8 @@ func cacheWrite(b *testing.B, cacheSize int) {
 
 func cacheRead(b *testing.B, cacheSize int) {
 	// init
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	var keys []string
@@ -326,7 +362,7 @@ func cacheRead(b *testing.B, cacheSize int) {
 
 func TestCacheEviction(t *testing.T) {
 
-	cfg := newNoOpTestConfig()
+	cfg, _ := newNoOpTestConfig()
 	cfg.Limit = 20
 	cache := NewLazyWriterCache(cfg)
 	defer cache.Shutdown()
@@ -368,7 +404,8 @@ func TestCacheEviction(t *testing.T) {
 func TestGormLazyCache_GetAndRelease(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -389,7 +426,7 @@ func TestGormLazyCache_GetAndRelease(t *testing.T) {
 func TestGormLazyCache_GetAndReleaseWithForcedPanic(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
-	cfg := newNoOpTestConfig(true)
+	cfg, handler := newNoOpTestConfig()
 	cache := NewLazyWriterCache(cfg)
 	defer cache.Shutdown()
 
@@ -409,6 +446,7 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanic(t *testing.T) {
 	assert.Falsef(t, cache.locked.Load(), "not locked after GetAndRelease")
 
 	assert.Panics(t, func() {
+		handler.errorOnNext.Store("find panic")
 		_, ok, _ := cache.GetAndRelease("test4")
 		assert.Falsef(t, ok, "should not be found")
 	})
@@ -418,7 +456,8 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanic(t *testing.T) {
 }
 
 func TestCacheStats_JSON(t *testing.T) {
-	cache := NewLazyWriterCache(newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	jsonStr := cache.JSON()
@@ -436,7 +475,8 @@ func TestRange(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -462,7 +502,8 @@ func TestRangeAbort(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
 	item3 := testItem{id: "test3"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	err := cache.Lock()
@@ -489,22 +530,26 @@ func TestRangeAbort(t *testing.T) {
 func TestNoGoroutineLeaks(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCacheWithContext[string, testItem](ctx, cfg)
 
 	err := cache.Lock()
 	assert.NoError(t, err)
 	cache.Save(testItem{id: "test"})
 	err = cache.Unlock()
 	assert.NoError(t, err)
-	time.Sleep(100 * time.Millisecond)
+	// Make sure go routine has had time to spin up
+	time.Sleep(50 * time.Millisecond)
 	cancel()
 	cache.Shutdown()
-	time.Sleep(300 * time.Millisecond)
+	// time for shutdown to complete
+	time.Sleep(50 * time.Millisecond)
 }
 
 func TestGetFromLockedErrIfNotLocked(t *testing.T) {
 	assert.NotPanics(t, func() {
-		cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+		cfg, _ := newNoOpTestConfig()
+		cache := NewLazyWriterCache[string, testItem](cfg)
 		_, _, err := cache.GetFromLocked("test")
 		assert.NotNil(t, err)
 	})
@@ -524,7 +569,7 @@ func TestEmptyCacheable(t *testing.T) {
 }
 
 func TestNewDefaultConfig(t *testing.T) {
-	handler := NewNoOpReaderWriter[testItem](newTestItem, false)
+	handler := NewNoOpReaderWriter[testItem](newTestItem)
 	config := NewDefaultConfig[string, testItem](handler)
 
 	// Verify default values
@@ -552,7 +597,8 @@ func TestCacheStats_String(t *testing.T) {
 func TestClearDirty(t *testing.T) {
 	item := testItem{id: "test1"}
 	item2 := testItem{id: "test2"}
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	// Add items to the cache and make them dirty
@@ -576,7 +622,8 @@ func TestClearDirty(t *testing.T) {
 }
 
 func TestIsDirty(t *testing.T) {
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	// Initially, cache should not be dirty
@@ -601,7 +648,8 @@ func TestIsDirty(t *testing.T) {
 }
 
 func TestGetKeys(t *testing.T) {
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	// Add items to the cache
@@ -630,7 +678,7 @@ func TestGetKeys(t *testing.T) {
 
 func TestEvictionManager(t *testing.T) {
 	// Create a cache with a small limit and short purge frequency
-	cfg := newNoOpTestConfig()
+	cfg, _ := newNoOpTestConfig()
 	cfg.Limit = 5
 	cfg.PurgeFreq = 50 * time.Millisecond
 
@@ -651,7 +699,9 @@ func TestEvictionManager(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Wait for eviction manager to run
-	time.Sleep(200 * time.Millisecond)
+	assert.Eventuallyf(t, func() bool {
+		return cache.Evictions.Load() > 0
+	}, 200*time.Millisecond, time.Millisecond, "eviction should complete")
 
 	// Check that the cache size is now at or below the limit
 	err = cache.Lock()
@@ -666,7 +716,7 @@ func TestEvictionManager(t *testing.T) {
 
 func TestLazyWriter(t *testing.T) {
 	// Create a cache with a short write frequency
-	cfg := newNoOpTestConfig()
+	cfg, _ := newNoOpTestConfig()
 	cfg.WriteFreq = 50 * time.Millisecond
 
 	cache := NewLazyWriterCache[string, testItem](cfg)
@@ -683,8 +733,9 @@ func TestLazyWriter(t *testing.T) {
 	// Verify items are marked as dirty
 	assert.True(t, cache.IsDirty(), "dirty records")
 
-	// Wait for lazy writer to run
-	time.Sleep(200 * time.Millisecond)
+	assert.Eventuallyf(t, func() bool {
+		return !cache.IsDirty() && cache.DirtyWrites.Load() > 0
+	}, 200*time.Millisecond, time.Millisecond, "cache write completes")
 
 	// Verify dirty items were processed
 	assert.False(t, cache.IsDirty(), "dirty records")
@@ -696,7 +747,7 @@ func TestNewLazyWriterCacheWithContext_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create a cache with the context
-	cfg := newNoOpTestConfig()
+	cfg, _ := newNoOpTestConfig()
 	cfg.WriteFreq = 50 * time.Millisecond
 	cfg.PurgeFreq = 50 * time.Millisecond
 	cfg.FlushOnShutdown = true
@@ -713,15 +764,17 @@ func TestNewLazyWriterCacheWithContext_Cancellation(t *testing.T) {
 	// Cancel the context to trigger shutdown
 	cancel()
 
-	// Wait for goroutines to exit
-	time.Sleep(200 * time.Millisecond)
+	assert.Eventuallyf(t, func() bool {
+		return !cache.IsDirty()
+	}, 200*time.Millisecond, time.Millisecond, "flush completes")
 
 	// Verify that the cache was flushed
 	assert.False(t, cache.IsDirty(), 0, "Dirty list should be empty after flush on shutdown")
 }
 
 func TestGetAndLock_Error(t *testing.T) {
-	cache := NewLazyWriterCache[string, testItem](newNoOpTestConfig())
+	cfg, _ := newNoOpTestConfig()
+	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
 
 	// Lock the cache to simulate concurrent access
@@ -737,7 +790,7 @@ func TestGetAndLock_Error(t *testing.T) {
 }
 
 func TestGetFromLocked_CompleteCodeCoverage(t *testing.T) {
-	cfg := newNoOpTestConfig()
+	cfg, _ := newNoOpTestConfig()
 	cfg.LookupOnMiss = true
 	cache := NewLazyWriterCache[string, testItem](cfg)
 	defer cache.Shutdown()
@@ -772,7 +825,7 @@ func TestGetFromLocked_CompleteCodeCoverage(t *testing.T) {
 
 func TestSaveDirtyToDB_CompleteCodeCoverage(t *testing.T) {
 	// Create a cache with a handler that will return an error on Save
-	handler := NewNoOpReaderWriter[testItem](newTestItem, false)
+	handler := NewNoOpReaderWriter[testItem](newTestItem)
 	cfg := Config[string, testItem]{
 		handler:      handler,
 		Limit:        1000,
@@ -821,14 +874,15 @@ func NewCustomReaderWriter[T Cacheable](itemTemplate func(key any) T) *CustomRea
 	saveAttempts = make(map[string]int)
 	saveAttemptsMutex.Unlock()
 
-	return &CustomReaderWriter[T]{
+	rw := &CustomReaderWriter[T]{
 		NoOpReaderWriter: NoOpReaderWriter[T]{
 			getTemplateItem: itemTemplate,
-			panicOnWrite:    false,
-			panicOnLoad:     false,
+			errorOnNext:     &atomic.Value{},
 		},
 		existingKeys: make(map[string]bool),
 	}
+	rw.errorOnNext.Store("")
+	return rw
 }
 
 func (g *CustomReaderWriter[T]) Find(key string, _ interface{}) (T, error) {
@@ -911,6 +965,7 @@ func TestSaveToDB_DeadlockRetry(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Flush the cache
+	handler.errorOnNext.Store("save deadlock")
 	err = cache.Flush()
 	assert.Error(t, err)
 	assert.True(t, cache.IsDirty(), "Still dirty after deadlock")
@@ -953,14 +1008,110 @@ func TestSaveToDB_NonRecoverableError(t *testing.T) {
 	// Flush the cache
 	err = cache.Flush()
 	assert.Error(t, err)
-	assert.False(t, cache.IsDirty(), "Not dirty after discard")
+	assert.False(t, cache.IsDirty(), "Dirty list should be empty after flush that couldn't be recovered from")
 
-	// Flush the cache again
+	assert.Equal(t, int64(0), cache.DirtyWrites.Load(), "DirtyWrites counter should be 0, nothing was written")
+	assert.Equal(t, int64(1), cache.FailedWrites.Load(), "FailedWrites counter should be 1")
+}
+
+func TestDeadlockDuringCommit(t *testing.T) {
+	cfg, handler := newNoOpTestConfig()
+	cfg.LookupOnMiss = true
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+	handler.errorOnNext.Store("commit deadlock")
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "existing"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+
+	err = cache.Flush()
+	assert.Error(t, err)
+
+	// Verify the item was processed
+	assert.True(t, cache.IsDirty(), "Dirty list should be empty after flush that couldn't be recovered from")
+	assert.Equal(t, int64(1), cache.DirtyWrites.Load(), "DirtyWrites counter should be 0, nothing was written")
+	assert.Equal(t, int64(0), cache.FailedWrites.Load(), "FailedWrites counter should be 1")
+
+}
+
+func TestPanicHandler(t *testing.T) {
+	cfg, handler := newNoOpTestConfig()
+	cfg.LookupOnMiss = true
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+	handler.errorOnNext.Store("commit panic")
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "existing"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+
 	err = cache.Flush()
 	assert.NoError(t, err)
 
 	// Verify the item was processed
-	assert.False(t, cache.IsDirty(), "Dirty list should be empty after flush")
-	assert.Equal(t, int64(0), cache.DirtyWrites.Load(), "DirtyWrites counter should be 0, nothing was written")
+	assert.False(t, cache.IsDirty(), "Dirty list should be empty after flush that couldn't be recovered from")
+	assert.Equal(t, int64(1), cache.DirtyWrites.Load(), "DirtyWrites counter should be 0, one attempt was made")
+	assert.Equal(t, int64(0), cache.FailedWrites.Load(), "FailedWrites counter should be 1")
+}
+
+func TestErrorDuringBegin(t *testing.T) {
+	cfg, handler := newNoOpTestConfig()
+	cfg.LookupOnMiss = true
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+	handler.errorOnNext.Store("begin error")
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "existing"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+
+	assert.True(t, cache.IsDirty())
+	err = cache.Flush()
+	assert.Error(t, err)
+	assert.True(t, cache.IsDirty())
+}
+
+func TestRollbackErrorDuringSave(t *testing.T) {
+	cfg, handler := newNoOpTestConfig()
+	cfg.LookupOnMiss = true
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+	handler.errorOnNext.Store("save duplicate key,rollback closed")
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "existing"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+
+	err = cache.Flush()
+	assert.Error(t, err)
+	assert.False(t, cache.IsDirty())
 	assert.Equal(t, int64(1), cache.FailedWrites.Load(), "FailedWrites counter should be 1")
+
+}
+
+func TestRollbackErrorDuringDeadlockRecover(t *testing.T) {
+	cfg, handler := newNoOpTestConfig()
+	cfg.LookupOnMiss = true
+	cache := NewLazyWriterCache[string, testItem](cfg)
+	defer cache.Shutdown()
+	handler.errorOnNext.Store("save deadlock,rollback closed")
+
+	err := cache.Lock()
+	assert.NoError(t, err)
+	cache.Save(testItem{id: "existing"})
+	err = cache.Unlock()
+	assert.NoError(t, err)
+
+	err = cache.Flush()
+	assert.Error(t, err)
+	assert.True(t, cache.IsDirty())
 }
