@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package lockfree
+package lazywritercache
 
 import (
 	"context"
@@ -154,24 +154,24 @@ func BenchmarkParallel_x5_CacheRead20kLF(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 5
 
-	parallelRun(b, cacheSize, nThreads)
+	parallelRunLF(b, cacheSize, nThreads)
 }
 
 func BenchmarkParallel_x10_CacheRead20kLF(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 10
 
-	parallelRun(b, cacheSize, nThreads)
+	parallelRunLF(b, cacheSize, nThreads)
 }
 
 func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 20
 
-	parallelRun(b, cacheSize, nThreads)
+	parallelRunLF(b, cacheSize, nThreads)
 }
 
-func parallelRun(b *testing.B, cacheSize int, nThreads int) {
+func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
 	defer cache.Shutdown()
 

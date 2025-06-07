@@ -28,22 +28,22 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/pilotso11/lazywritercache/lockfree"
+	"github.com/pilotso11/lazywritercache"
 )
 
 // LoggerLF is an interface that can be implemented to provide logging for the cache.
 // The default logger is log.Println.
 type LoggerLF interface {
-	Info(msg string, action string, item ...lockfree.CacheableLF)
-	Warn(msg string, action string, item ...lockfree.CacheableLF)
-	Error(msg string, action string, item ...lockfree.CacheableLF)
+	Info(msg string, action string, item ...lazywritercache.CacheableLF)
+	Warn(msg string, action string, item ...lazywritercache.CacheableLF)
+	Error(msg string, action string, item ...lazywritercache.CacheableLF)
 }
 
 // ReaderWriteLF is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
 // It's been tested with Postgres and Mysql.   UseTransactions should be set to true unless you have a really good reason not to.
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
-type ReaderWriteLF[T lockfree.CacheableLF] struct {
+type ReaderWriteLF[T lazywritercache.CacheableLF] struct {
 	db              *gorm.DB
 	getTemplateItem func(key string) T
 	UseTransactions bool
@@ -51,10 +51,10 @@ type ReaderWriteLF[T lockfree.CacheableLF] struct {
 }
 
 // Check interface is complete
-var _ lockfree.CacheReaderWriterLF[lockfree.EmptyCacheableLF] = (*ReaderWriteLF[lockfree.EmptyCacheableLF])(nil)
+var _ lazywritercache.CacheReaderWriterLF[lazywritercache.EmptyCacheableLF] = (*ReaderWriteLF[lazywritercache.EmptyCacheableLF])(nil)
 
 // NewReaderWriterLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
-func NewReaderWriterLF[T lockfree.CacheableLF](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[T] {
+func NewReaderWriterLF[T lazywritercache.CacheableLF](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[T] {
 	return ReaderWriteLF[T]{
 		db:              db,
 		getTemplateItem: itemTemplate,

@@ -10,10 +10,10 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"github.com/pilotso11/lazywritercache/lockfree"
+	"github.com/pilotso11/lazywritercache"
 )
 
-// testDBItemLF implements the lockfree.CacheableLF interface for testing
+// testDBItemLF implements the lazywritercache.CacheableLF interface for testing
 type testDBItemLF struct {
 	ID    uint `gorm:"primarykey"`
 	Value string
@@ -25,7 +25,7 @@ func (i testDBItemLF) Key() string {
 	return i.Value
 }
 
-func (i testDBItemLF) CopyKeyDataFrom(from lockfree.CacheableLF) lockfree.CacheableLF {
+func (i testDBItemLF) CopyKeyDataFrom(from lazywritercache.CacheableLF) lazywritercache.CacheableLF {
 	i.Value = from.Key()
 	return i
 }
@@ -49,19 +49,19 @@ type MockLoggerLF struct {
 	LastAction  string
 }
 
-func (m *MockLoggerLF) Info(msg string, action string, item ...lockfree.CacheableLF) {
+func (m *MockLoggerLF) Info(msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.InfoCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Warn(msg string, action string, item ...lockfree.CacheableLF) {
+func (m *MockLoggerLF) Warn(msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.WarnCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Error(msg string, action string, item ...lockfree.CacheableLF) {
+func (m *MockLoggerLF) Error(msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.ErrorCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
@@ -421,9 +421,9 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 	gormRW := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Create a LazyWriterCacheLF
-	cfg := lockfree.NewDefaultConfigLF[testDBItemLF](gormRW)
+	cfg := lazywritercache.NewDefaultConfigLF[testDBItemLF](gormRW)
 	cfg.WriteFreq = 100 * time.Millisecond
-	cache := lockfree.NewLazyWriterCacheLF[testDBItemLF](cfg)
+	cache := lazywritercache.NewLazyWriterCacheLF[testDBItemLF](cfg)
 	defer cache.Shutdown()
 
 	// Test loading a non-existent item

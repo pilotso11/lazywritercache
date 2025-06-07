@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-package lockfree
+package lazywritercache
 
 import (
 	"context"
@@ -33,8 +33,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync"
 
-	"github.com/pilotso11/lazywritercache"
-	"github.com/pilotso11/lazywritercache/lockfree/lockfreequeue"
+	"github.com/pilotso11/lazywritercache/lockfreequeue"
 )
 
 type CacheableLF interface {
@@ -99,7 +98,7 @@ type LazyWriterCacheLF[T CacheableLF] struct {
 	cache  *xsync.MapOf[string, T]
 	dirty  *xsync.MapOf[string, bool]
 	fifo   *lockfreequeue.LockFreeQueue[string]
-	lazywritercache.CacheStats
+	CacheStats
 }
 
 // NewLazyWriterCacheLF creates a new, and starts up its lazy db writer ticker.
