@@ -58,9 +58,8 @@ func newtestItemLF(key string) testItemLF {
 	}
 }
 
-func newNoOpTestConfigLF(panics ...bool) ConfigLF[testItemLF] {
-	doPanics := len(panics) > 0 && panics[0]
-	readerWriter := NewNoOpReaderWriterLF[testItemLF](newtestItemLF, doPanics)
+func newNoOpTestConfigLF() ConfigLF[testItemLF] {
+	readerWriter := NewNoOpReaderWriterLF[testItemLF](newtestItemLF)
 	return ConfigLF[testItemLF]{
 		handler:      readerWriter,
 		Limit:        1000,
@@ -161,6 +160,13 @@ func BenchmarkParallel_x5_CacheRead20kLF(b *testing.B) {
 func BenchmarkParallel_x10_CacheRead20kLF(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 10
+
+	parallelRun(b, cacheSize, nThreads)
+}
+
+func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
+	cacheSize := 20000
+	nThreads := 20
 
 	parallelRun(b, cacheSize, nThreads)
 }
@@ -284,7 +290,7 @@ func TestGormLazyCache_GetAndReleaseLF(t *testing.T) {
 func TestGormLazyCache_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF(true)
+	cfg := newNoOpTestConfigLF()
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 
@@ -297,6 +303,7 @@ func TestGormLazyCache_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
+	cfg.handler.(NoOpReaderWriterLF[testItemLF]).panicOnNext.Store(true)
 	assert.Panics(t, func() {
 		_, ok := cache.Load("test4")
 		assert.Falsef(t, ok, "should not be found")
@@ -371,6 +378,243 @@ func TestNoGoroutineLeaksLF(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	cache.Shutdown()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+}
 
+func TestNewDefaultConfigLF(t *testing.T) {
+	handler := NewNoOpReaderWriterLF[testItemLF](newtestItemLF)
+	config := NewDefaultConfigLF[testItemLF](handler)
+
+	// Verify default values
+	assert.NotNil(t, config.handler, "Handler should not be nil")
+	assert.Equal(t, 10000, config.Limit, "Default limit should be 10000")
+	assert.True(t, config.LookupOnMiss, "LookupOnMiss should be true by default")
+	assert.Equal(t, 500*time.Millisecond, config.WriteFreq, "Default WriteFreq should be 500ms")
+	assert.Equal(t, 10*time.Second, config.PurgeFreq, "Default PurgeFreq should be 10s")
+	assert.False(t, config.FlushOnShutdown, "FlushOnShutdown should be false by default")
+}
+
+func TestEmptyCacheableLF(t *testing.T) {
+	empty := EmptyCacheableLF{}
+
+	// Test Key method
+	key := empty.Key()
+	assert.Equal(t, "", key, "EmptyCacheableLF.Key should return empty string")
+
+	// Test CopyKeyDataFrom method
+	item := testItemLF{id: "test"}
+	result := empty.CopyKeyDataFrom(item)
+	assert.Equal(t, item, result, "EmptyCacheableLF.CopyKeyDataFrom should return the input item")
+}
+
+func TestClearDirtyLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	item2 := testItemLF{id: "test2"}
+	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	defer cache.Shutdown()
+
+	// Add items to the cache and make them dirty
+	cache.Save(item)
+	cache.Save(item2)
+	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
+
+	// Test ClearDirty
+	cache.ClearDirty()
+	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty after ClearDirty")
+}
+
+func TestPeriodicSaveLF(t *testing.T) {
+	// Create a cache with a short write frequency
+	cfg := newNoOpTestConfigLF()
+	cfg.WriteFreq = 50 * time.Millisecond
+
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	// Add items to the cache
+	cache.Save(testItemLF{id: "test1"})
+	cache.Save(testItemLF{id: "test2"})
+
+	// Verify items are marked as dirty
+	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
+
+	assert.Eventuallyf(t, func() bool {
+		return !cache.IsDirty()
+	}, 100*time.Millisecond, time.Millisecond, "Cache should not be dirty after save")
+
+	// Verify dirty items were processed
+	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty after lazy writer runs")
+	assert.Greater(t, cache.DirtyWrites.Load(), int64(0), "DirtyWrites counter should be incremented")
+}
+
+func TestPeriodicEvictionsLF(t *testing.T) {
+	// Create a cache with a small limit and short purge frequency
+	cfg := newNoOpTestConfigLF()
+	cfg.Limit = 5
+	cfg.PurgeFreq = 50 * time.Millisecond
+	cfg.WriteFreq = 50 * time.Millisecond // Need to flush dirty items for eviction to work
+
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	// Add more items than the limit
+	for i := 0; i < 10; i++ {
+		cache.Save(testItemLF{id: strconv.Itoa(i)})
+	}
+
+	// Verify all items are in the cache initially
+	assert.Equal(t, 10, cache.cache.Size(), "Should have 10 items in cache initially")
+
+	// Wait for eviction manager to run multiple times
+	// We need to wait longer to ensure the eviction process completes
+	assert.Eventuallyf(t, func() bool {
+		return cache.cache.Size() <= cfg.Limit
+	}, 500*time.Millisecond, time.Millisecond, "Cache size should be at or below the limit after eviction")
+
+	// Verify cache size is now at or below the limit
+	assert.LessOrEqual(t, cache.cache.Size(), cfg.Limit, "Cache size should be at or below the limit after eviction")
+	assert.Greater(t, cache.Evictions.Load(), int64(0), "Evictions counter should be incremented")
+}
+
+func TestFlushOnShutdownLF(t *testing.T) {
+	// Create a cache with FlushOnShutdown enabled
+	cfg := newNoOpTestConfigLF()
+	cfg.WriteFreq = 1 * time.Hour // Long enough that it won't trigger during the test
+	cfg.FlushOnShutdown = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, cfg)
+
+	// Add items to the cache
+	cache.Save(testItemLF{id: "test1"})
+	cache.Save(testItemLF{id: "test2"})
+
+	// Verify items are marked as dirty
+	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
+
+	// Cancel the context to trigger shutdown
+	cancel()
+
+	// Wait a bit for the shutdown to complete
+	assert.Eventuallyf(t, func() bool {
+		return cache.dirty.Size() == 0
+	}, 100*time.Millisecond, time.Millisecond, "Cache should be empty after shutdown with FlushOnShutdown=true")
+
+	// Verify dirty items were processed during shutdown
+	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty after shutdown with FlushOnShutdown=true")
+	assert.Greater(t, cache.DirtyWrites.Load(), int64(0), "DirtyWrites counter should be incremented")
+}
+
+func TestRequeueRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock")
+	cache.Flush()
+	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+}
+
+func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save duplicate key")
+	cache.Flush()
+	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
+}
+
+func TestRequeueCommitRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("commit deadlock")
+	cache.Flush()
+	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+}
+
+func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("commit duplicate key")
+	cache.Flush()
+	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 0, cache.dirty.Size(), "0 items should be in the cache")
+}
+
+func TestRequeueBeginRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("begin db no connections")
+	cache.Flush()
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+}
+
+func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock,rollback error")
+	cache.Flush()
+	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	assert.Equal(t, int64(3), testHandler.warnCount.Load(), "Warnings received")
+}
+
+func TestPanicHandlerLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock,panic")
+	cache.Flush()
+	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
+	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
 }

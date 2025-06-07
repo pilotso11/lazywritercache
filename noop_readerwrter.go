@@ -25,48 +25,62 @@ package lazywritercache
 import (
 	"errors"
 	"log"
+	"strings"
+	"sync/atomic"
 )
 
 type NoOpReaderWriter[T Cacheable] struct {
 	getTemplateItem func(key interface{}) T
-	panicOnLoad     bool // for testing error handling
-	panicOnWrite    bool // for testing error handling
+	errorOnNext     *atomic.Value
 }
 
 // Check interface is complete
 var _ CacheReaderWriter[string, EmptyCacheable] = (*NoOpReaderWriter[EmptyCacheable])(nil)
 
-func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key any) T, forcePanics ...bool) NoOpReaderWriter[T] {
-	doPanics := len(forcePanics) > 0 && forcePanics[0]
-	return NoOpReaderWriter[T]{
+func NewNoOpReaderWriter[T Cacheable](itemTemplate func(key any) T) NoOpReaderWriter[T] {
+	w := NoOpReaderWriter[T]{
 		getTemplateItem: itemTemplate,
-		panicOnWrite:    doPanics,
-		panicOnLoad:     doPanics,
+		errorOnNext:     &atomic.Value{},
 	}
+	w.errorOnNext.Store("")
+	return w
 }
 
 func (g NoOpReaderWriter[T]) Find(key string, _ interface{}) (T, error) {
 	template := g.getTemplateItem(key)
-	if g.panicOnLoad {
-		panic("test panic, read")
+	if err := g.nextError("find"); err != nil {
+		return template, err
 	}
 	return template, errors.New("NoOp, item not found")
 }
 
 func (g NoOpReaderWriter[T]) Save(_ T, _ interface{}) error {
-	if g.panicOnWrite {
-		panic("test panic, write")
+	if err := g.nextError("save"); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (g NoOpReaderWriter[T]) BeginTx() (tx interface{}, err error) {
+	if err := g.nextError("begin"); err != nil {
+		return nil, err
+	}
 	tx = "transaction"
 	return tx, nil
 }
 
-func (g NoOpReaderWriter[T]) CommitTx(_ interface{}) {
-	return
+func (g NoOpReaderWriter[T]) CommitTx(_ interface{}) error {
+	if err := g.nextError("commit"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (g NoOpReaderWriter[T]) RollbackTx(_ interface{}) error {
+	if err := g.nextError("rollback"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (g NoOpReaderWriter[T]) Info(msg string, _ string, _ ...T) {
@@ -75,4 +89,23 @@ func (g NoOpReaderWriter[T]) Info(msg string, _ string, _ ...T) {
 
 func (g NoOpReaderWriter[T]) Warn(msg string, _ string, _ ...T) {
 	log.Print("[warn] ", msg)
+}
+
+func (g NoOpReaderWriter[T]) nextError(s string) error {
+	next := g.errorOnNext.Load().(string)
+	if strings.Contains(next, s) {
+		parts := strings.SplitN(next, ",", 2)
+		err := errors.New(parts[0])
+		if strings.Contains(parts[0], "panic") {
+			panic(parts[0])
+		}
+		if len(parts) == 2 {
+			g.errorOnNext.Store(parts[1])
+		} else {
+			g.errorOnNext.Store("")
+		}
+		return err
+	}
+	return nil
+
 }
