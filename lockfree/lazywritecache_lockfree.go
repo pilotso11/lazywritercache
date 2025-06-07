@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -59,7 +60,8 @@ type CacheReaderWriterLF[T CacheableLF] interface {
 	Find(key string, tx any) (T, error)
 	Save(item T, tx any) error
 	BeginTx() (tx any, err error)
-	CommitTx(tx any)
+	CommitTx(tx any) error
+	RollbackTx(tx any) error
 	Info(msg string, action string, item ...T)
 	Warn(msg string, action string, item ...T)
 }
@@ -188,7 +190,8 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		return
 	}
 	// Ensure the commit runs
-	defer c.handler.CommitTx(tx)
+
+	unCommitted := make([]T, 0)
 
 	c.dirty.Range(func(k string, _ bool) bool {
 		c.dirty.Delete(k)
@@ -209,11 +212,18 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		err = c.handler.Save(item, tx)
 
 		if err != nil {
-			c.handler.Warn(fmt.Sprintf("Error saving %s to DB: %v", old.Key(), err), "write-dirty", item)
+			if isRecoverableError(err) {
+				c.handler.Warn(fmt.Sprintf("Recoverable error saving %s to DB, batch will be retried: %v", old.Key(), err), "write-dirty", item)
+				unCommitted = append(unCommitted, item)
+				fail++
+				return false
+			}
+			c.handler.Warn(fmt.Sprintf("Unrecoverable error saving %s to DB: %v", old.Key(), err), "write-dirty", item)
 			fail++
-			return true // don't update cache, move to next item
+			return false // don't update cache, move to next item
 		}
 		c.DirtyWrites.Add(1)
+		unCommitted = append(unCommitted, item)
 
 		// Briefly lock the cache and update it with the merged data.
 		// As we have not held the lock during the DB update, there is a race condition where a
@@ -235,10 +245,42 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 	})
 
 	if fail > 0 {
-		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "write-dirty")
+		err = c.handler.RollbackTx(tx)
+		if err != nil {
+			c.handler.Warn(fmt.Sprintf("Error rolling back transaction: %v", err), "write-dirty")
+			return
+		}
 	} else {
-		c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "write-dirty")
+		err = c.handler.CommitTx(tx)
+		if err != nil {
+			fail++
+			if !isRecoverableError(err) {
+				c.handler.Warn(fmt.Sprintf("Unrecoverable error saving batch to DB: %v", err), "write-dirty")
+				unCommitted = make([]T, 0)
+			} else {
+				c.handler.Warn(fmt.Sprintf("Recoverable error saving batch to DB, batch will be retried: %v", err), "write-dirty")
+			}
+		}
 	}
+
+	// Put re-triable items back
+	if fail > 0 {
+		for _, item := range unCommitted {
+			c.dirty.Store(item.Key(), true)
+		}
+		c.handler.Warn(fmt.Sprintf("Error syncing cache to DB: %v failures, %v successes", fail, success), "write-dirty")
+		return
+	}
+
+	c.handler.Info(fmt.Sprintf("Completed DB Sync, flushed %d records", success), "write-dirty")
+}
+
+// check for recoverable DB errors
+func isRecoverableError(err error) bool {
+	if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
+		return true
+	}
+	return false
 }
 
 // ClearDirty forcefully empties the dirty queue, for example if the cache has just been forcefully loaded from the db, and
@@ -323,4 +365,8 @@ func (c *LazyWriterCacheLF[T]) Range(action func(k string, v T) bool) (n int) {
 // This does not Flush the cache first unless ConfigLF.FlushOnShutdown is true.
 func (c *LazyWriterCacheLF[T]) Shutdown() {
 	c.cancel()
+}
+
+func (c *LazyWriterCacheLF[T]) IsDirty() bool {
+	return c.dirty.Size() > 0
 }

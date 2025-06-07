@@ -274,6 +274,54 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
 }
 
+func TestReaderWriteLF_RollbackTx(t *testing.T) {
+	// Create a mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
+	defer db.Close()
+
+	gDB, err := gorm.Open(postgres.New(postgres.Config{
+		Conn:       db,
+		DriverName: "postgres",
+	}), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("Error creating gorm DB: %v", err)
+	}
+
+	// Test CommitTx with UseTransactions = true
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw.UseTransactions = true
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	tx := gDB.Begin()
+	err = rw.RollbackTx(tx)
+	assert.NoError(t, err, "RollbackTx should not return an error")
+	// Test CommitTx with UseTransactions = false
+	rw.UseTransactions = false
+	err = rw.CommitTx(gDB)
+	assert.NoError(t, err, "RollbackTx with no TX should not return an error")
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
+
+	// Force an exception
+	rw.UseTransactions = true
+	mock.ExpectBegin()
+	mock.ExpectRollback().WillReturnError(gorm.ErrInvalidData)
+	tx2, err := rw.BeginTx()
+	assert.NoError(t, err, "BeginTx should not return an error")
+	err = rw.RollbackTx(tx2)
+	assert.Error(t, err, "RollbackTx should return an error")
+	assert.Equal(t, gorm.ErrInvalidData, err, "Error should be gorm.ErrInvalidData")
+
+	// Verify all expectations were met
+	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
+
+}
+
 func TestReaderWriteLF_Info(t *testing.T) {
 	// Create a mock database
 	db, _, err := sqlmock.New()

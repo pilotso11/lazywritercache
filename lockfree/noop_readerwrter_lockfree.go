@@ -25,48 +25,90 @@ package lockfree
 import (
 	"errors"
 	"log"
+	"strings"
+	"sync/atomic"
 )
 
+// NoOpReaderWriterLF is a mock ReaderWriter for the lock free version of lazy writer cache.
 type NoOpReaderWriterLF[T CacheableLF] struct {
 	getTemplateItem func(key string) T
-	panicOnLoad     bool // for testing error handling
-	panicOnWrite    bool // for testing error handling
+	panicOnNext     *atomic.Bool
+	errorOnNext     *atomic.Value
+	warnCount       *atomic.Int64
 }
 
 // Check interface is complete
 var _ CacheReaderWriterLF[EmptyCacheableLF] = (*NoOpReaderWriterLF[EmptyCacheableLF])(nil)
 
-func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T, forcePanics ...bool) NoOpReaderWriterLF[T] {
-	doPanics := len(forcePanics) > 0 && forcePanics[0]
+func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T) NoOpReaderWriterLF[T] {
 	return NoOpReaderWriterLF[T]{
 		getTemplateItem: itemTemplate,
-		panicOnWrite:    doPanics,
-		panicOnLoad:     doPanics,
+		panicOnNext:     &atomic.Bool{},
+		errorOnNext:     &atomic.Value{},
+		warnCount:       &atomic.Int64{},
 	}
 }
 
-func (g NoOpReaderWriterLF[T]) Find(key string, _ interface{}) (T, error) {
-	template := g.getTemplateItem(key)
-	if g.panicOnLoad {
-		panic("test panic, read")
+func (g NoOpReaderWriterLF[T]) Find(key string, _ any) (T, error) {
+	if g.panicOnNext.CompareAndSwap(true, false) {
+		panic("test panic, write")
 	}
+	msg := g.errorOnNext.Load()
+	if msg != nil && strings.Contains(msg.(string), "find") {
+		g.errorOnNext.Store("")
+		return g.getTemplateItem(""), errors.New("write " + msg.(string))
+	}
+	template := g.getTemplateItem(key)
 	return template, errors.New("NoOp, item not found")
 }
 
-func (g NoOpReaderWriterLF[T]) Save(_ T, _ interface{}) error {
-	if g.panicOnWrite {
+func (g NoOpReaderWriterLF[T]) Save(_ T, _ any) error {
+	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, write")
+	}
+	msg := g.errorOnNext.Load()
+	if msg != nil && strings.Contains(msg.(string), "save") {
+		g.errorOnNext.Store("")
+		return errors.New("load " + msg.(string))
 	}
 	return nil
 }
 
-func (g NoOpReaderWriterLF[T]) BeginTx() (tx interface{}, err error) {
+func (g NoOpReaderWriterLF[T]) BeginTx() (tx any, err error) {
+	if g.panicOnNext.CompareAndSwap(true, false) {
+		panic("test panic, begin")
+	}
+	msg := g.errorOnNext.Load()
+	if msg != nil && strings.Contains(msg.(string), "begin") {
+		g.errorOnNext.Store("")
+		return nil, errors.New("beginTx " + msg.(string))
+	}
 	tx = "transaction"
 	return tx, nil
 }
 
-func (g NoOpReaderWriterLF[T]) CommitTx(_ interface{}) {
-	return
+func (g NoOpReaderWriterLF[T]) CommitTx(_ any) error {
+	if g.panicOnNext.CompareAndSwap(true, false) {
+		panic("test panic, commit")
+	}
+	msg := g.errorOnNext.Load()
+	if msg != nil && strings.Contains(msg.(string), "commit") {
+		g.errorOnNext.Store("")
+		return errors.New("commitTx " + msg.(string))
+	}
+	return nil
+}
+
+func (g NoOpReaderWriterLF[T]) RollbackTx(_ any) error {
+	if g.panicOnNext.CompareAndSwap(true, false) {
+		panic("test panic, rollback")
+	}
+	msg := g.errorOnNext.Load()
+	if msg != nil && strings.Contains(msg.(string), "rollback") {
+		g.errorOnNext.Store("")
+		return errors.New("rollbackTx " + msg.(string))
+	}
+	return nil
 }
 
 func (g NoOpReaderWriterLF[T]) Info(msg string, _ string, _ ...T) {
@@ -74,5 +116,6 @@ func (g NoOpReaderWriterLF[T]) Info(msg string, _ string, _ ...T) {
 }
 
 func (g NoOpReaderWriterLF[T]) Warn(msg string, _ string, _ ...T) {
+	g.warnCount.Add(1)
 	log.Print("[warn] ", msg)
 }
