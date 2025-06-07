@@ -560,5 +560,54 @@ func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 	cache.Flush()
 	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, 0, cache.dirty.Size(), "0 items should be in the cache")
+}
 
+func TestRequeueBeginRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("begin db no connections")
+	cache.Flush()
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+}
+
+func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock,rollback error")
+	cache.Flush()
+	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	assert.Equal(t, int64(3), testHandler.warnCount.Load(), "Warnings received")
+}
+
+func TestPanicHandlerLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock,panic")
+	cache.Flush()
+	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
+	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
 }

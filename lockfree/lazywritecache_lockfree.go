@@ -177,7 +177,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 	// Catch any panics
 	defer func() {
 		if r := recover(); r != nil {
-			c.handler.Warn(fmt.Sprintf("Panic in lazy write %v", r), "write-dirty")
+			c.handler.Warn(fmt.Sprintf("Panic in lazy write %q, data loss possible.", r), "write-dirty")
 		}
 	}()
 
@@ -187,6 +187,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 	// even though it holds the lock on the DB side longer.
 	tx, err := c.handler.BeginTx()
 	if err != nil {
+		c.handler.Warn(fmt.Sprintf("Recoverable error with BeginTx, batch will be retried: %v", err), "write-dirty")
 		return
 	}
 	// Ensure the commit runs
@@ -197,6 +198,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		c.dirty.Delete(k)
 		item, ok := c.cache.Load(k)
 		if !ok {
+			// item no longer in cache, skip it
 			return true
 		}
 		// Load the item from the DB.
@@ -248,17 +250,16 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB() {
 		err = c.handler.RollbackTx(tx)
 		if err != nil {
 			c.handler.Warn(fmt.Sprintf("Error rolling back transaction: %v", err), "write-dirty")
-			return
 		}
 	} else {
 		err = c.handler.CommitTx(tx)
 		if err != nil {
 			fail++
 			if !isRecoverableError(err) {
-				c.handler.Warn(fmt.Sprintf("Unrecoverable error saving batch to DB: %v", err), "write-dirty")
+				c.handler.Warn(fmt.Sprintf("Unrecoverable error from CommitTx batch will be lost: %v", err), "write-dirty")
 				unCommitted = make([]T, 0)
 			} else {
-				c.handler.Warn(fmt.Sprintf("Recoverable error saving batch to DB, batch will be retried: %v", err), "write-dirty")
+				c.handler.Warn(fmt.Sprintf("Recoverable error from CommitTx, batch will be retried: %v", err), "write-dirty")
 			}
 		}
 	}

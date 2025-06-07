@@ -55,7 +55,7 @@ func (g NoOpReaderWriterLF[T]) Find(key string, _ any) (T, error) {
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "find") {
-		g.errorOnNext.Store("")
+		g.removeFromErrorOnNext()
 		return g.getTemplateItem(""), errors.New("write " + msg.(string))
 	}
 	template := g.getTemplateItem(key)
@@ -68,7 +68,7 @@ func (g NoOpReaderWriterLF[T]) Save(_ T, _ any) error {
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "save") {
-		g.errorOnNext.Store("")
+		g.removeFromErrorOnNext()
 		return errors.New("load " + msg.(string))
 	}
 	return nil
@@ -80,7 +80,7 @@ func (g NoOpReaderWriterLF[T]) BeginTx() (tx any, err error) {
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "begin") {
-		g.errorOnNext.Store("")
+		g.removeFromErrorOnNext()
 		return nil, errors.New("beginTx " + msg.(string))
 	}
 	tx = "transaction"
@@ -93,7 +93,7 @@ func (g NoOpReaderWriterLF[T]) CommitTx(_ any) error {
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "commit") {
-		g.errorOnNext.Store("")
+		g.removeFromErrorOnNext()
 		return errors.New("commitTx " + msg.(string))
 	}
 	return nil
@@ -105,7 +105,7 @@ func (g NoOpReaderWriterLF[T]) RollbackTx(_ any) error {
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "rollback") {
-		g.errorOnNext.Store("")
+		g.removeFromErrorOnNext()
 		return errors.New("rollbackTx " + msg.(string))
 	}
 	return nil
@@ -118,4 +118,20 @@ func (g NoOpReaderWriterLF[T]) Info(msg string, _ string, _ ...T) {
 func (g NoOpReaderWriterLF[T]) Warn(msg string, _ string, _ ...T) {
 	g.warnCount.Add(1)
 	log.Print("[warn] ", msg)
+}
+
+// remove first of comma separated list of errors.
+func (g NoOpReaderWriterLF[T]) removeFromErrorOnNext() {
+	next := g.errorOnNext.Load().(string)
+	parts := strings.SplitN(next, ",", 2)
+	if len(parts) == 2 {
+		g.errorOnNext.Store(parts[1])
+		// force a panic?
+		if strings.Contains(parts[1], "panic") {
+			g.errorOnNext.Store("")
+			panic(parts[1])
+		}
+	} else {
+		g.errorOnNext.Store("")
+	}
 }
