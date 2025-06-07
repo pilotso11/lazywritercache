@@ -16,7 +16,8 @@ func TestNewLockFreeQueue(t *testing.T) {
 
 	// Test that a new queue is empty (dequeue should return zero value)
 	var zeroVal int
-	val := q.Dequeue()
+	val, ok := q.Dequeue()
+	assert.False(t, ok, "Dequeue from empty queue should return false")
 	assert.Equal(t, zeroVal, val, "Dequeue from empty queue should return zero value")
 }
 
@@ -29,13 +30,21 @@ func TestEnqueueDequeue(t *testing.T) {
 	q.Enqueue("third")
 
 	// Test FIFO order
-	assert.Equal(t, "first", q.Dequeue(), "First dequeued item should be 'first'")
-	assert.Equal(t, "second", q.Dequeue(), "Second dequeued item should be 'second'")
-	assert.Equal(t, "third", q.Dequeue(), "Third dequeued item should be 'third'")
+	item, ok := q.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, "first", item, "First dequeued item should be 'first'")
+	item, ok = q.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, "second", item, "Second dequeued item should be 'second'")
+	item, ok = q.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, "third", item, "Third dequeued item should be 'third'")
 
 	// Test dequeue from empty queue
 	var emptyString string
-	assert.Equal(t, emptyString, q.Dequeue(), "Dequeue from empty queue should return zero value")
+	item, ok = q.Dequeue()
+	assert.False(t, ok, "Dequeue from empty queue should return false")
+	assert.Equal(t, emptyString, item, "Dequeue from empty queue should return zero value")
 }
 
 func TestEnqueueDequeueWithDifferentTypes(t *testing.T) {
@@ -43,8 +52,12 @@ func TestEnqueueDequeueWithDifferentTypes(t *testing.T) {
 	qInt := NewLockFreeQueue[int]()
 	qInt.Enqueue(42)
 	qInt.Enqueue(100)
-	assert.Equal(t, 42, qInt.Dequeue(), "First dequeued int should be 42")
-	assert.Equal(t, 100, qInt.Dequeue(), "Second dequeued int should be 100")
+	item, ok := qInt.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, 42, item, "First dequeued int should be 42")
+	item, ok = qInt.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, 100, item, "Second dequeued int should be 100")
 
 	// Test with custom struct type
 	type Person struct {
@@ -59,8 +72,10 @@ func TestEnqueueDequeueWithDifferentTypes(t *testing.T) {
 	qPerson.Enqueue(alice)
 	qPerson.Enqueue(bob)
 
-	firstPerson := qPerson.Dequeue()
-	secondPerson := qPerson.Dequeue()
+	firstPerson, ok := qPerson.Dequeue()
+	assert.True(t, ok, "ok should be true for item in queue")
+	secondPerson, ok := qPerson.Dequeue()
+	assert.True(t, ok, "ok should be true for item in queue")
 
 	assert.Equal(t, alice, firstPerson, "First dequeued person should be Alice")
 	assert.Equal(t, bob, secondPerson, "Second dequeued person should be Bob")
@@ -91,7 +106,7 @@ func TestConcurrentOperations(t *testing.T) {
 	// Count the number of items we can dequeue
 	count := 0
 	for {
-		val := q.Dequeue()
+		val, _ := q.Dequeue()
 		if val == 0 && count >= numGoroutines*numOperations {
 			break
 		}
@@ -137,8 +152,8 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 			defer consumerWg.Done()
 			defer cDone.Add(1)
 			for {
-				val := q.Dequeue()
-				if val != 0 {
+				_, ok := q.Dequeue()
+				if ok {
 					dequeued.Add(1)
 				} else {
 					if producersDone.Load() == 1 {

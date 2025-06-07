@@ -138,19 +138,30 @@ func NewLazyWriterCacheWithContextLF[T CacheableLF](ctx context.Context, cfg Con
 // Load will lock and load an item from the cache and then release the lock.
 func (c *LazyWriterCacheLF[T]) Load(key string) (T, bool) {
 	item, ok := c.cache.Load(key)
-	if !ok {
-		c.Misses.Add(1)
-		if c.LookupOnMiss {
-			item, err := c.handler.Find(key, nil)
-			if err == nil {
-				c.Save(item)
-				return item, true
-			}
-		}
-		return item, false
+	if ok {
+		c.Hits.Add(1)
+		return item, true
 	}
-	c.Hits.Add(1)
-	return item, ok
+
+	// Cache miss
+	c.Misses.Add(1)
+	if c.LookupOnMiss {
+		// Assuming handler.Find can take a nil transaction context if not in a transaction
+		itemFromDB, err := c.handler.Find(key, nil)
+		if err == nil {
+			// Found in DB, save to cache and return.
+			// Save will mark it dirty and add to FIFO for potential eviction.
+			c.Save(itemFromDB)
+			return itemFromDB, true
+		}
+		// If err != nil, item was not found in DB or an error occurred.
+		// Proceed to return not found.
+	}
+
+	// Not found in cache, and either LookupOnMiss is false,
+	// or DB lookup failed/returned no item.
+	var zeroT T // Ensure a true zero value for T is returned
+	return zeroT, false
 }
 
 // Save updates an item in the cache.
@@ -304,25 +315,41 @@ func (c *LazyWriterCacheLF[T]) evictionManager() {
 }
 
 // process evictions if the cache is larger than desired
+// Suggested improvement for evictionProcessor:
 func (c *LazyWriterCacheLF[T]) evictionProcessor() {
 	for c.cache.Size() > c.Limit {
-		if func() bool {
-			toRemove := c.fifo.Dequeue()
-			dirty, ok := c.dirty.Load(toRemove)
-			if ok && dirty {
-				// This is a dirty item, we can't evict it, so we put it back on the queue
-				item, _ := c.cache.Load(toRemove)
-				c.handler.Warn("Dirty items at the top of the purge queue, skipping eviction", "evict", item)
-				c.fifo.Enqueue(toRemove)
-				return true
-			}
-
-			c.cache.Delete(toRemove)
-			c.Evictions.Add(1)
-			return false
-		}() {
+		keyToEvict, fifoOk := c.fifo.Dequeue()
+		if !fifoOk {
+			// FIFO queue is empty, but cache size > limit.
+			// This might happen if all remaining items are dirty and constantly re-queued,
+			// or if there's a discrepancy. Stop eviction for this cycle.
+			c.handler.Info("Eviction attempted on empty FIFO queue while cache size > limit.", "evict")
 			return
 		}
+
+		isDirty, dirtyLoaded := c.dirty.Load(keyToEvict)
+		if dirtyLoaded && isDirty {
+			// Item is dirty, cannot evict. Put it back at the end of the queue.
+			// Log if the item is actually still in the cache.
+			if item, itemInCache := c.cache.Load(keyToEvict); itemInCache {
+				c.handler.Warn("Dirty item at head of purge queue; re-queueing, eviction paused for this cycle.", "evict", item)
+			} else {
+				// It's unusual for a key to be in 'dirty' but not in 'cache'.
+				// Still, re-queue to respect its dirty status if it was recently removed by other means.
+				c.handler.Warn(fmt.Sprintf("Dirty key %s (not in cache) at head of purge queue; re-queueing.", keyToEvict), "evict")
+			}
+			c.fifo.Enqueue(keyToEvict) // Re-enqueue the dirty key
+			return                     // Stop this eviction cycle; wait for next PurgeFreq or for item to become non-dirty.
+		}
+
+		// Item is not dirty (or not in dirty map), proceed with eviction.
+		// Deleting from cache first.
+		c.cache.Delete(keyToEvict)
+		// Note: The key might still be in the dirty map if `dirtyLoaded` was false.
+		// Consider c.dirty.Delete(keyToEvict) here as well if strict consistency is needed,
+		// though non-dirty items shouldn't typically be in the dirty map.
+		c.Evictions.Add(1)
+		// Loop continues to check if cache size is still > Limit.
 	}
 }
 

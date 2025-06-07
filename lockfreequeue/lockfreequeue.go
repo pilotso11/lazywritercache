@@ -67,7 +67,7 @@ func (q *LockFreeQueue[T]) Enqueue(v T) {
 
 // Dequeue removes and returns the value at the head of the queue.
 // It returns nil if the queue is empty.
-func (q *LockFreeQueue[T]) Dequeue() (val T) {
+func (q *LockFreeQueue[T]) Dequeue() (val T, ok bool) {
 	for {
 		head := q.head.Load()
 		tail := q.tail.Load()
@@ -75,7 +75,7 @@ func (q *LockFreeQueue[T]) Dequeue() (val T) {
 		if head == q.head.Load() { // are head, tail, and next consistent?
 			if head == tail { // is queue empty or tail falling behind?
 				if next == nil { // is queue empty?
-					return
+					return val, false
 				}
 				// tail is falling behind.  try to advance it
 				q.tail.CompareAndSwap(tail, next)
@@ -83,7 +83,7 @@ func (q *LockFreeQueue[T]) Dequeue() (val T) {
 				// read value before CAS otherwise another dequeue might free the next node
 				v := next.value
 				if q.head.CompareAndSwap(head, next) {
-					return v // Dequeue is done.  return
+					return v, true // Dequeue is done.  return
 				}
 			}
 		}
