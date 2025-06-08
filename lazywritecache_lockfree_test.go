@@ -315,6 +315,130 @@ func TestCacheEvictionLF(t *testing.T) {
 	assert.Truef(t, ok, "29 should not have been evicted")
 }
 
+// TestCacheEvictionEmptyFIFOLF tests the scenario where the FIFO queue is empty
+// but the cache still has items. This represents an incorrect state in the underlying cache.
+func TestCacheEvictionEmptyFIFOLF(t *testing.T) {
+	ctx := context.Background()
+	cfg := newNoOpTestConfigLF()
+	cfg.Limit = 5 // Set a small limit
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+
+	// Add items to the cache directly without using the FIFO queue
+	for i := 0; i < 10; i++ {
+		id := strconv.Itoa(i)
+		item := testItemLF{id: id}
+		// Use direct access to cache map to bypass the normal Save method
+		// which would add items to the FIFO queue
+		cache.cache.Store(id, item)
+	}
+
+	// Verify the cache has items but FIFO is empty
+	assert.Equal(t, 10, cache.cache.Size(), "Cache should have 10 items")
+	_, fifoOk := cache.fifo.Peek()
+	assert.False(t, fifoOk, "FIFO queue should be empty")
+
+	// Run the eviction processor
+	cache.evictionProcessor(ctx)
+
+	// Verify the cache size remains the same since eviction can't proceed with empty FIFO
+	assert.Equal(t, 10, cache.cache.Size(), "Cache size should remain unchanged when FIFO is empty")
+}
+
+// TestCacheEvictionDirtyItemNotInCacheLF tests the scenario where an item is marked as dirty
+// but is not in the cache because it has been deleted while dirty.
+func TestCacheEvictionDirtyItemNotInCacheLF(t *testing.T) {
+	ctx := context.Background()
+	cfg := newNoOpTestConfigLF()
+	cfg.Limit = 5 // Set a small limit
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+
+	// Add an item to the cache and mark it as dirty
+	testKey := "test-key"
+	item := testItemLF{id: testKey}
+	cache.Save(item)
+
+	// Verify the item is in the cache and marked as dirty
+	_, inCache := cache.cache.Load(testKey)
+	assert.True(t, inCache, "Item should be in the cache")
+	isDirty, inDirty := cache.dirty.Load(testKey)
+	assert.True(t, inDirty, "Item should be in the dirty list")
+	assert.True(t, isDirty, "Item should be marked as dirty")
+
+	// Remove the item from the cache but leave it in the dirty list
+	cache.cache.Delete(testKey)
+
+	// Verify the item is not in the cache but still in the dirty list
+	_, inCache = cache.cache.Load(testKey)
+	assert.False(t, inCache, "Item should not be in the cache")
+	isDirty, inDirty = cache.dirty.Load(testKey)
+	assert.True(t, inDirty, "Item should still be in the dirty list")
+	assert.True(t, isDirty, "Item should still be marked as dirty")
+
+	// Make sure the cache size is above the limit to trigger eviction
+	for i := 0; i < 10; i++ {
+		id := strconv.Itoa(i)
+		item := testItemLF{id: id}
+		cache.cache.Store(id, item)
+	}
+
+	// Ensure our test key is at the head of the FIFO queue
+	// First, empty the queue
+	for {
+		_, ok := cache.fifo.Dequeue()
+		if !ok {
+			break
+		}
+	}
+	// Then add our test key as the only item
+	cache.fifo.Enqueue(testKey)
+
+	// Run the eviction processor
+	cache.evictionProcessor(ctx)
+
+	// Verify the item has been removed from the dirty list
+	_, inDirty = cache.dirty.Load(testKey)
+	assert.False(t, inDirty, "Item should have been removed from the dirty list")
+}
+
+// TestCacheEvictionRaceConditionLF tests the race condition between two eviction processors
+// where one evicts the head between peek and removing the item.
+func TestCacheEvictionRaceConditionLF(t *testing.T) {
+	ctx := context.Background()
+	cfg := newNoOpTestConfigLF()
+	cfg.Limit = 5 // Set a small limit
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+
+	// Add items to the cache
+	for i := 0; i < 10; i++ {
+		id := strconv.Itoa(i)
+		item := testItemLF{id: id}
+		cache.Save(item)
+	}
+
+	// Flush to make items non-dirty
+	cache.Flush(ctx)
+
+	// Simulate a race condition by manually manipulating the FIFO queue
+	// First, peek at the head of the queue (this would be done by one eviction processor)
+	keyToEvict, ok := cache.fifo.Peek()
+	assert.True(t, ok, "Should be able to peek at the head of the queue")
+
+	// Now simulate another eviction processor dequeuing the head
+	evictedKey, ok := cache.fifo.Dequeue()
+	assert.True(t, ok, "Should be able to dequeue the head")
+	assert.Equal(t, keyToEvict, evictedKey, "The dequeued key should match the peeked key")
+
+	// Now run the eviction processor, which will try to dequeue the same key
+	// but will find a different key at the head
+	cache.evictionProcessor(ctx)
+
+	// Verify the cache size has been reduced
+	assert.LessOrEqual(t, cache.cache.Size(), cfg.Limit, "Cache size should be at or below the limit after eviction")
+}
+
 // Test_GetAndReleaseLF is a simple test for Save and Load, similar to TestCacheStoreLoadLF.
 // It ensures items can be saved and then retrieved.
 func Test_GetAndReleaseLF(t *testing.T) {

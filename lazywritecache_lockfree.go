@@ -293,7 +293,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 			} else {
 				// Item was purged from cache between DB save and this update.
 				// It was saved to DB, but won't be re-added to cache here.
-				c.handler.Warn(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), "write-dirty", item)
+				c.handler.Info(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), "write-dirty", item)
 			}
 		}()
 		success++
