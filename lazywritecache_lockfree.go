@@ -25,6 +25,7 @@ package lazywritercache
 import (
 	"context"
 	"fmt"
+	"hash/maphash"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -36,11 +37,13 @@ import (
 	"github.com/pilotso11/lazywritercache/lockfreequeue"
 )
 
+// todo: enum for action messages
+
 // CacheableLF items must implement a Key method that returns a string. The actual key need not be a string internally
 // but the use of xsync.MapOf requires a hashable string as the key.
-type CacheableLF interface {
+type CacheableLF[K comparable] interface {
 	// Key must return a unique hashable key for the item in order to avoid cache collisions.
-	Key() string
+	Key() K
 	// CopyKeyDataFrom is CRITICAL for data consistency during lazy writes.
 	// It should merge ONLY database-managed fields (e.g., auto-increment IDs,
 	// created_at/updated_at timestamps managed by the DB) from the `from` item
@@ -50,7 +53,7 @@ type CacheableLF interface {
 	// Example: if `from` has a new DB-generated ID or a newer `updated_at` timestamp,
 	// those should be copied to the receiver. Other application-specific fields in the
 	// receiver should remain untouched by this method.
-	CopyKeyDataFrom(from CacheableLF) CacheableLF
+	CopyKeyDataFrom(from CacheableLF[K]) CacheableLF[K]
 }
 
 // EmptyCacheableLF - placeholder used as a return value if the cache can't find anything
@@ -61,14 +64,14 @@ func (i EmptyCacheableLF) Key() string {
 	return ""
 }
 
-func (i EmptyCacheableLF) CopyKeyDataFrom(from CacheableLF) CacheableLF {
+func (i EmptyCacheableLF) CopyKeyDataFrom(from CacheableLF[string]) CacheableLF[string] {
 	return from // no op
 }
 
-var _ CacheableLF = (*EmptyCacheableLF)(nil)
+var _ CacheableLF[string] = (*EmptyCacheableLF)(nil)
 
-type CacheReaderWriterLF[T CacheableLF] interface {
-	Find(ctx context.Context, key string, tx any) (T, error)
+type CacheReaderWriterLF[K comparable, T CacheableLF[K]] interface {
+	Find(ctx context.Context, key K, tx any) (T, error)
 	Save(ctx context.Context, item T, tx any) error
 	BeginTx(ctx context.Context) (tx any, err error)
 	CommitTx(ctx context.Context, tx any) error
@@ -92,8 +95,8 @@ type CacheReaderWriterLF[T CacheableLF] interface {
 	Fail(ctx context.Context, err error, items ...T)
 }
 
-type ConfigLF[T CacheableLF] struct {
-	handler               CacheReaderWriterLF[T]
+type ConfigLF[K comparable, T CacheableLF[K]] struct {
+	handler               CacheReaderWriterLF[K, T]
 	Limit                 int
 	LookupOnMiss          bool // If true, a cache miss will query the DB, with associated performance hit!
 	WriteFreq             time.Duration
@@ -102,8 +105,8 @@ type ConfigLF[T CacheableLF] struct {
 	AllowConcurrentWrites bool
 }
 
-func NewDefaultConfigLF[T CacheableLF](handler CacheReaderWriterLF[T]) ConfigLF[T] {
-	return ConfigLF[T]{
+func NewDefaultConfigLF[K comparable, T CacheableLF[K]](handler CacheReaderWriterLF[K, T]) ConfigLF[K, T] {
+	return ConfigLF[K, T]{
 		handler:      handler,
 		Limit:        10000,
 		LookupOnMiss: true,
@@ -119,13 +122,14 @@ func NewDefaultConfigLF[T CacheableLF](handler CacheReaderWriterLF[T]) ConfigLF[
 // There is no synchronisation on Save or any error handling if the DB is in an inconsistent state
 // To use this in a distributed mode, we'd need to replace it with something like REDIS that keeps a distributed
 // cache for update, and then use a single writer to persist to the DB - with some clustering strategy
-type LazyWriterCacheLF[T CacheableLF] struct {
-	ConfigLF[T]
+type LazyWriterCacheLF[K comparable, T CacheableLF[K]] struct {
+	ConfigLF[K, T]
 	cancel  context.CancelFunc
-	cache   *xsync.MapOf[string, T]
-	dirty   *xsync.MapOf[string, bool]
-	fifo    *lockfreequeue.LockFreeQueue[string]
+	cache   *xsync.MapOf[K, T]
+	dirty   *xsync.MapOf[K, bool]
+	fifo    *lockfreequeue.LockFreeQueue[K]
 	writing *atomic.Bool
+	hasher  func(k K) uint64
 	CacheStats
 }
 
@@ -133,7 +137,7 @@ type LazyWriterCacheLF[T CacheableLF] struct {
 // Users need to pass a DB Find function and ensure their objects implement lazywritercache.Cacheable which has two functions,
 // one to return the Key() and the other to copy key variables into the cached item from the DB loaded item. (i.e. the number ID, update time etc.)
 // because the lazy write cannot just "Save" the item back to the DB as it might have been updated during the lazy write as its asynchronous.
-func NewLazyWriterCacheLF[T CacheableLF](cfg ConfigLF[T]) *LazyWriterCacheLF[T] {
+func NewLazyWriterCacheLF[K comparable, T CacheableLF[K]](cfg ConfigLF[K, T]) *LazyWriterCacheLF[K, T] {
 	return NewLazyWriterCacheWithContextLF(context.Background(), cfg)
 }
 
@@ -141,15 +145,23 @@ func NewLazyWriterCacheLF[T CacheableLF](cfg ConfigLF[T]) *LazyWriterCacheLF[T] 
 // Users need to pass a DB Find function and ensure their objects implement lazywritercache.Cacheable which has two functions,
 // one to return the Key() and the other to copy key variables into the cached item from the DB loaded item. (i.e. the number ID, update time etc.)
 // because the lazy write cannot just "Save" the item back to the DB as it might have been updated during the lazy write as its asynchronous.
-func NewLazyWriterCacheWithContextLF[T CacheableLF](ctx context.Context, cfg ConfigLF[T]) *LazyWriterCacheLF[T] {
+func NewLazyWriterCacheWithContextLF[K comparable, T CacheableLF[K]](ctx context.Context, cfg ConfigLF[K, T]) *LazyWriterCacheLF[K, T] {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	cache := LazyWriterCacheLF[T]{
+
+	// Hash func required for xsync.NewTypedMapOf.
+	seed := maphash.MakeSeed()
+	hasher := func(k K) uint64 {
+		return maphash.Comparable(seed, k)
+	}
+
+	cache := LazyWriterCacheLF[K, T]{
 		ConfigLF: cfg,
 		cancel:   cancel,
-		cache:    xsync.NewMapOf[T](),
-		dirty:    xsync.NewMapOf[bool](),
-		fifo:     lockfreequeue.NewLockFreeQueue[string](),
+		cache:    xsync.NewTypedMapOf[K, T](hasher),
+		dirty:    xsync.NewTypedMapOf[K, bool](hasher),
+		fifo:     lockfreequeue.NewLockFreeQueue[K](),
 		writing:  &atomic.Bool{},
+		hasher:   hasher,
 	}
 
 	if cache.WriteFreq > 0 { // start lazyWriter, use write freq zero for testing
@@ -164,7 +176,7 @@ func NewLazyWriterCacheWithContextLF[T CacheableLF](ctx context.Context, cfg Con
 }
 
 // Load will lock and load an item from the cache and then release the lock.
-func (c *LazyWriterCacheLF[T]) Load(ctx context.Context, key string) (T, bool) {
+func (c *LazyWriterCacheLF[K, T]) Load(ctx context.Context, key K) (T, bool) {
 	item, ok := c.cache.Load(key)
 	if ok {
 		c.Hits.Add(1)
@@ -193,7 +205,7 @@ func (c *LazyWriterCacheLF[T]) Load(ctx context.Context, key string) (T, bool) {
 }
 
 // Save updates an item in the cache.
-func (c *LazyWriterCacheLF[T]) Save(item T) {
+func (c *LazyWriterCacheLF[K, T]) Save(item T) {
 	c.Stores.Add(1)
 	c.cache.Store(item.Key(), item) // save in cache
 	c.dirty.Store(item.Key(), true) // add to dirty list
@@ -201,7 +213,7 @@ func (c *LazyWriterCacheLF[T]) Save(item T) {
 }
 
 // Go routine to Save the dirty records to the DB, this is the lazy writer
-func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
+func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 	// Get all the dirty records
 	// return without any locks if there is no work
 	if c.dirty.Size() == 0 {
@@ -244,7 +256,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 
 	unCommitted := make([]T, 0)
 
-	c.dirty.Range(func(k string, _ bool) bool {
+	c.dirty.Range(func(k K, _ bool) bool {
 		c.dirty.Delete(k) // Optimistically remove from dirty; will be re-added if write fails recoverably.
 		item, ok := c.cache.Load(k)
 		if !ok {
@@ -266,12 +278,12 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 		if err != nil {
 			// Use the handler's IsRecoverable method to check error type
 			if c.handler.IsRecoverable(ctx, err) {
-				c.handler.Info(ctx, fmt.Sprintf("Recoverable error saving %s to DB, batch will be retried: %v", item.Key(), err), "write-dirty", item)
+				c.handler.Info(ctx, fmt.Sprintf("Recoverable error saving %v to DB, batch will be retried: %v", item.Key(), err), "write-dirty", item)
 				unCommitted = append(unCommitted, item) // Add original item from cache for retry
 				fail++
 				return false // Stop processing this batch, it will be retried.
 			}
-			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error saving %s to DB: %v", item.Key(), err), "write-dirty", item)
+			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error saving %v to DB: %v", item.Key(), err), "write-dirty", item)
 			c.handler.Fail(ctx, err, item)
 			fail++
 			// For unrecoverable errors, we don't re-add to unCommitted for this transaction's retry.
@@ -362,12 +374,12 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 // Note: This only clears the 'dirty' tracking map. Items might still exist in the
 // FIFO eviction queue. If an item cleared from 'dirty' is still in the FIFO queue,
 // the evictionProcessor will see it as non-dirty and may evict it.
-func (c *LazyWriterCacheLF[T]) ClearDirty() {
-	c.dirty = xsync.NewMapOf[bool]() // clear dirty list
+func (c *LazyWriterCacheLF[K, T]) ClearDirty() {
+	c.dirty = xsync.NewTypedMapOf[K, bool](c.hasher) // clear dirty list
 }
 
 // Go routine to evict the cache every few seconds to keep it trimmed to the desired size - or there abouts
-func (c *LazyWriterCacheLF[T]) evictionManager(ctx context.Context) {
+func (c *LazyWriterCacheLF[K, T]) evictionManager(ctx context.Context) {
 	tick := time.NewTicker(c.PurgeFreq)
 	for {
 		select {
@@ -385,7 +397,7 @@ func (c *LazyWriterCacheLF[T]) evictionManager(ctx context.Context) {
 // This is by design, as dirty items should not be evicted before being written.
 // This might appear as a busy-loop for the eviction processor if WriteFreq is too slow
 // or DB writes are failing, but it prevents data loss.
-func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
+func (c *LazyWriterCacheLF[K, T]) evictionProcessor(ctx context.Context) {
 	for c.cache.Size() > c.Limit {
 		keyToEvict, fifoOk := c.fifo.Peek()
 		if !fifoOk {
@@ -406,7 +418,7 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 				// It's unusual for a key to be in 'dirty' but not in 'cache'.
 				// It might have been deleted from cache but not yet from dirty list by another process.
 				// In this case, just remove it from dirty list as it's not in cache.
-				c.handler.Warn(ctx, fmt.Sprintf("Dirty key %s (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), "evict")
+				c.handler.Warn(ctx, fmt.Sprintf("Dirty key %v (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), "evict")
 				c.dirty.Delete(keyToEvict) // Remove from dirty as it's not in cache.
 				_, _ = c.fifo.Dequeue()    // remove the head of the fifo
 				// there is no need to check the dequeued item is also the item we peeked at because
@@ -432,7 +444,7 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 }
 
 // this is the lazy writer goroutine
-func (c *LazyWriterCacheLF[T]) lazyWriter(ctx context.Context) {
+func (c *LazyWriterCacheLF[K, T]) lazyWriter(ctx context.Context) {
 	ticker := time.NewTicker(c.WriteFreq)
 	for {
 		select {
@@ -451,15 +463,15 @@ func (c *LazyWriterCacheLF[T]) lazyWriter(ctx context.Context) {
 // Flush forces all dirty items to be written to the database.
 // Flush should be called before exiting the application otherwise dirty writes will be lost.
 // As the lazy writer is set up with a timer this should only need to be called at exit.
-func (c *LazyWriterCacheLF[T]) Flush(ctx context.Context) {
+func (c *LazyWriterCacheLF[K, T]) Flush(ctx context.Context) {
 	c.saveDirtyToDB(ctx)
 }
 
 // Range over all the keys and maps.
 //
 // As with other Range functions return true to continue iterating or false to stop.
-func (c *LazyWriterCacheLF[T]) Range(action func(k string, v T) bool) (n int) {
-	c.cache.Range(func(k string, v T) bool {
+func (c *LazyWriterCacheLF[K, T]) Range(action func(k K, v T) bool) (n int) {
+	c.cache.Range(func(k K, v T) bool {
 		n++
 		return action(k, v)
 	})
@@ -468,10 +480,10 @@ func (c *LazyWriterCacheLF[T]) Range(action func(k string, v T) bool) (n int) {
 
 // Shutdown signals to the cache it should stop any running goroutines.
 // This does not Flush the cache first unless ConfigLF.FlushOnShutdown is true.
-func (c *LazyWriterCacheLF[T]) Shutdown() {
+func (c *LazyWriterCacheLF[K, T]) Shutdown() {
 	c.cancel()
 }
 
-func (c *LazyWriterCacheLF[T]) IsDirty() bool {
+func (c *LazyWriterCacheLF[K, T]) IsDirty() bool {
 	return c.dirty.Size() > 0
 }

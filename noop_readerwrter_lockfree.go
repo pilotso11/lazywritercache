@@ -32,8 +32,8 @@ import (
 )
 
 // NoOpReaderWriterLF is a mock ReaderWriter for the lock free version of lazy writer cache.
-type NoOpReaderWriterLF[T CacheableLF] struct {
-	getTemplateItem func(key string) T
+type NoOpReaderWriterLF[K comparable, T CacheableLF[K]] struct {
+	getTemplateItem func(key K) T
 	panicOnNext     *atomic.Bool
 	errorOnNext     *atomic.Value
 	warnCount       *atomic.Int64
@@ -43,12 +43,12 @@ type NoOpReaderWriterLF[T CacheableLF] struct {
 }
 
 // Check interface is complete
-var _ CacheReaderWriterLF[EmptyCacheableLF] = (*NoOpReaderWriterLF[EmptyCacheableLF])(nil)
+var _ CacheReaderWriterLF[string, EmptyCacheableLF] = (*NoOpReaderWriterLF[string, EmptyCacheableLF])(nil)
 
-func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T) NoOpReaderWriterLF[T] {
+func NewNoOpReaderWriterLF[K comparable, T CacheableLF[K]](itemTemplate func(key K) T) NoOpReaderWriterLF[K, T] {
 	var buf strings.Builder
 	log.SetOutput(&buf)
-	return NoOpReaderWriterLF[T]{
+	return NoOpReaderWriterLF[K, T]{
 		getTemplateItem: itemTemplate,
 		panicOnNext:     &atomic.Bool{},
 		errorOnNext:     &atomic.Value{},
@@ -59,20 +59,20 @@ func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T) NoOpR
 	}
 }
 
-func (g NoOpReaderWriterLF[T]) Find(_ context.Context, key string, _ any) (T, error) {
+func (g NoOpReaderWriterLF[K, T]) Find(_ context.Context, key K, _ any) (T, error) {
 	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, write")
 	}
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "find") {
 		g.removeFromErrorOnNext()
-		return g.getTemplateItem(""), errors.New("write " + msg.(string))
+		return g.getTemplateItem(key), errors.New("write " + msg.(string))
 	}
 	template := g.getTemplateItem(key)
 	return template, errors.New("NoOp, item not found")
 }
 
-func (g NoOpReaderWriterLF[T]) Save(_ context.Context, _ T, _ any) error {
+func (g NoOpReaderWriterLF[K, T]) Save(_ context.Context, _ T, _ any) error {
 	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, write")
 	}
@@ -84,7 +84,7 @@ func (g NoOpReaderWriterLF[T]) Save(_ context.Context, _ T, _ any) error {
 	return nil
 }
 
-func (g NoOpReaderWriterLF[T]) BeginTx(_ context.Context) (tx any, err error) {
+func (g NoOpReaderWriterLF[K, T]) BeginTx(_ context.Context) (tx any, err error) {
 	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, begin")
 	}
@@ -97,7 +97,7 @@ func (g NoOpReaderWriterLF[T]) BeginTx(_ context.Context) (tx any, err error) {
 	return tx, nil
 }
 
-func (g NoOpReaderWriterLF[T]) CommitTx(_ context.Context, _ any) error {
+func (g NoOpReaderWriterLF[K, T]) CommitTx(_ context.Context, _ any) error {
 	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, commit")
 	}
@@ -109,7 +109,7 @@ func (g NoOpReaderWriterLF[T]) CommitTx(_ context.Context, _ any) error {
 	return nil
 }
 
-func (g NoOpReaderWriterLF[T]) RollbackTx(_ context.Context, _ any) error {
+func (g NoOpReaderWriterLF[K, T]) RollbackTx(_ context.Context, _ any) error {
 	if g.panicOnNext.CompareAndSwap(true, false) {
 		panic("test panic, rollback")
 	}
@@ -121,22 +121,22 @@ func (g NoOpReaderWriterLF[T]) RollbackTx(_ context.Context, _ any) error {
 	return nil
 }
 
-func (g NoOpReaderWriterLF[T]) Info(_ context.Context, msg string, _ string, _ ...T) {
+func (g NoOpReaderWriterLF[K, T]) Info(_ context.Context, msg string, _ string, _ ...T) {
 	g.infoCount.Add(1)
 	log.Print("[info] ", msg)
 }
 
-func (g NoOpReaderWriterLF[T]) Warn(_ context.Context, msg string, _ string, _ ...T) {
+func (g NoOpReaderWriterLF[K, T]) Warn(_ context.Context, msg string, _ string, _ ...T) {
 	g.warnCount.Add(1)
 	log.Print("[warn] ", msg)
 }
 
-func (g NoOpReaderWriterLF[T]) PrintLog() {
+func (g NoOpReaderWriterLF[K, T]) PrintLog() {
 	fmt.Println(g.logBuffer.String())
 }
 
 // remove first of comma separated list of errors.
-func (g NoOpReaderWriterLF[T]) removeFromErrorOnNext() {
+func (g NoOpReaderWriterLF[K, T]) removeFromErrorOnNext() {
 	next := g.errorOnNext.Load().(string)
 	parts := strings.SplitN(next, ",", 2)
 	if len(parts) == 2 {
@@ -151,7 +151,7 @@ func (g NoOpReaderWriterLF[T]) removeFromErrorOnNext() {
 	}
 }
 
-func (g NoOpReaderWriterLF[T]) IsRecoverable(_ context.Context, err error) bool {
+func (g NoOpReaderWriterLF[K, T]) IsRecoverable(_ context.Context, err error) bool {
 	if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
 		return true
 	}
@@ -161,6 +161,6 @@ func (g NoOpReaderWriterLF[T]) IsRecoverable(_ context.Context, err error) bool 
 	return false
 }
 
-func (g NoOpReaderWriterLF[T]) Fail(_ context.Context, _ error, _ ...T) {
+func (g NoOpReaderWriterLF[K, T]) Fail(_ context.Context, _ error, _ ...T) {
 	g.fails.Add(1)
 }
