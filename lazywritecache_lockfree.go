@@ -37,8 +37,11 @@ import (
 	"github.com/pilotso11/lazywritercache/lockfreequeue"
 )
 
-// CacheableLF items must implement a Key method that returns a string. The actual key need not be a string internally
-// but the use of xsync.MapOf requires a hashable string as the key.
+// CacheableLF items must implement a Key method that returns a comparable for use in a map key.
+// It must also implement a method to CopyKeyDataFrom another item.  LazyWriterCacheLF must be able to merge any
+// key details that might be added externally. For example, a DB table may logically use a string as key (unique constraint)
+// but use a sequence as its real primary key.  In this case we need to ensure that if we use the string key internally
+// that we can join up with the DB key created on insert.
 type CacheableLF[K comparable] interface {
 	// Key must return a unique hashable key for the item in order to avoid cache collisions.
 	Key() K
@@ -68,14 +71,32 @@ func (i EmptyCacheableLF) CopyKeyDataFrom(from CacheableLF[string]) CacheableLF[
 
 var _ CacheableLF[string] = (*EmptyCacheableLF)(nil)
 
+// CacheReaderWriterLF defines an interface for managing cache operations and database transactions.
+// It supports finding, saving, and transactional operations with recoverable error handling and logging functionality.
 type CacheReaderWriterLF[K comparable, T CacheableLF[K]] interface {
+
+	// Find retrieves an item of type T identified by the provided key from the data store.
+	// Returns the item and an error if the operation fails.
 	Find(ctx context.Context, key K, tx any) (T, error)
+
+	// Save stores the given item in the persistence layer. Save must act as an upsert function, processing both new and existing items..
 	Save(ctx context.Context, item T, tx any) error
+
+	// BeginTx initializes and returns a new database transaction along with any potential error encountered.
 	BeginTx(ctx context.Context) (tx any, err error)
+
+	// CommitTx commits the provided transaction, completing any changes made within the transaction scope.
 	CommitTx(ctx context.Context, tx any) error
+
+	// RollbackTx rolls back the provided transaction, undoing any changes made within the transaction scope.
 	RollbackTx(ctx context.Context, tx any) error
+
+	// Info logs an informational message describing a cache action performed on one or more cacheable items provided as input.
 	Info(ctx context.Context, msg string, action CacheAction, item ...T)
+
+	// Warn logs a warning with the provided message, cache action, and optional items for additional context.
 	Warn(ctx context.Context, msg string, action CacheAction, item ...T)
+
 	// IsRecoverable determines if a database error is transient and the operation
 	// should be retried.
 	//
@@ -90,22 +111,34 @@ type CacheReaderWriterLF[K comparable, T CacheableLF[K]] interface {
 	//   - Persistent connection failures or authentication issues.
 	//   - "Record not found" errors if the operation expected the record to exist.
 	IsRecoverable(_ context.Context, err error) bool
+
+	// Fail logs and handles an irrecoverable error occurring during a flush operation. Affected items are included,
+	// and will be supplied unless the failure was triggered by a BeginTx error..
 	Fail(ctx context.Context, err error, items ...T)
 }
 
+// ConfigLF defines the configuration options for a lazy write cache mechanism, including performance and behavior controls.
 type ConfigLF[K comparable, T CacheableLF[K]] struct {
-	handler               CacheReaderWriterLF[K, T]
-	Limit                 int
-	LookupOnMiss          bool // If true, a cache miss will query the DB, with associated performance hit!
-	WriteFreq             time.Duration
-	PurgeFreq             time.Duration
-	FlushOnShutdown       bool
+	// Limit defines the maximum number of items in the cache.  This is a hint and can be violated if items are added faster than they can be saved.
+	Limit int
+	// LookupOnMiss controls whether a cache miss will query the DB,  If false the cache only handles items explicitly put into it.
+	LookupOnMiss bool
+	// WriteFreq specifies the interval for periodic writes to the database in a lazy write cache mechanism.
+	WriteFreq time.Duration
+	// PurgeFreq specifies the interval for periodic evictions from the cache in a lazy write cache mechanism.
+	PurgeFreq time.Duration
+	// FlushOnShutdown determines if the cache should write all pending changes to the database before shutting down.
+	FlushOnShutdown bool
+	// AllowConcurrentWrites determines if multiple write operations to the database can occur concurrently in the cache.
 	AllowConcurrentWrites bool
+	// Handler specifies the CacheReaderWriterLF interface for managing cache operations and database transactions in the lazy write cache.
+	Handler CacheReaderWriterLF[K, T]
 }
 
+// NewDefaultConfigLF initializes a ConfigLF with default settings for cache limits, frequencies, and behavior parameters.
 func NewDefaultConfigLF[K comparable, T CacheableLF[K]](handler CacheReaderWriterLF[K, T]) ConfigLF[K, T] {
 	return ConfigLF[K, T]{
-		handler:      handler,
+		Handler:      handler,
 		Limit:        10000,
 		LookupOnMiss: true,
 		WriteFreq:    500 * time.Millisecond,
@@ -184,8 +217,8 @@ func (c *LazyWriterCacheLF[K, T]) Load(ctx context.Context, key K) (T, bool) {
 	// Cache miss
 	c.Misses.Add(1)
 	if c.LookupOnMiss {
-		// Assuming handler.Find can take a nil transaction context if not in a transaction
-		itemFromDB, err := c.handler.Find(ctx, key, nil)
+		// Assuming Handler.Find can take a nil transaction context if not in a transaction
+		itemFromDB, err := c.Handler.Find(ctx, key, nil)
 		if err == nil {
 			// Found in DB, save to cache and return.
 			// Save will mark it dirty and add to FIFO for potential eviction.
@@ -226,14 +259,14 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 		defer c.writing.Store(false)
 	}
 
-	c.handler.Info(ctx, fmt.Sprintf("Found %d dirty records to write to the DB", c.dirty.Size()), ActionWriteDirty)
+	c.Handler.Info(ctx, fmt.Sprintf("Found %d dirty records to write to the DB", c.dirty.Size()), ActionWriteDirty)
 	success := 0
 	fail := 0
 
 	// Catch any panics
 	defer func() {
 		if r := recover(); r != nil {
-			c.handler.Warn(ctx, fmt.Sprintf("Panic in lazy write %q, data loss possible.", r), ActionWriteDirty)
+			c.Handler.Warn(ctx, fmt.Sprintf("Panic in lazy write %q, data loss possible.", r), ActionWriteDirty)
 		}
 	}()
 
@@ -241,13 +274,13 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 	// as a single DB transaction.
 	// For most databases this is a smart choice performance wise
 	// even though it holds the lock on the DB side longer.
-	tx, err := c.handler.BeginTx(ctx)
-	if err != nil && c.handler.IsRecoverable(ctx, err) {
-		c.handler.Info(ctx, fmt.Sprintf("Recoverable error with BeginTx, batch will be retried: %v", err), ActionWriteDirty)
+	tx, err := c.Handler.BeginTx(ctx)
+	if err != nil && c.Handler.IsRecoverable(ctx, err) {
+		c.Handler.Info(ctx, fmt.Sprintf("Recoverable error with BeginTx, batch will be retried: %v", err), ActionWriteDirty)
 		return
 	} else if err != nil {
-		c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from BeginTx: %q, batch will be aborted", err), ActionWriteDirty)
-		c.handler.Fail(ctx, err)
+		c.Handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from BeginTx: %q, batch will be aborted", err), ActionWriteDirty)
+		c.Handler.Fail(ctx, err)
 		return
 	}
 	// Ensure the commit runs
@@ -264,25 +297,25 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 		// Load the item from the DB.
 		// If the item already exists in the DB make sure we merge any key data if needed.
 		// ORMs will need this if they are managing row ID keys.
-		old, err := c.handler.Find(ctx, item.Key(), tx)
+		old, err := c.Handler.Find(ctx, item.Key(), tx)
 		if err == nil {
 			// Copy the key data in for the existing record into the new record, so we can save it
 			item = item.CopyKeyDataFrom(old).(T)
 		}
 
 		// Save back the merged item
-		err = c.handler.Save(ctx, item, tx)
+		err = c.Handler.Save(ctx, item, tx)
 
 		if err != nil {
-			// Use the handler's IsRecoverable method to check error type
-			if c.handler.IsRecoverable(ctx, err) {
-				c.handler.Info(ctx, fmt.Sprintf("Recoverable error saving %v to DB, batch will be retried: %v", item.Key(), err), ActionWriteDirty, item)
+			// Use the Handler's IsRecoverable method to check error type
+			if c.Handler.IsRecoverable(ctx, err) {
+				c.Handler.Info(ctx, fmt.Sprintf("Recoverable error saving %v to DB, batch will be retried: %v", item.Key(), err), ActionWriteDirty, item)
 				unCommitted = append(unCommitted, item) // Add original item from cache for retry
 				fail++
 				return false // Stop processing this batch, it will be retried.
 			}
-			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error saving %v to DB: %v", item.Key(), err), ActionWriteDirty, item)
-			c.handler.Fail(ctx, err, item)
+			c.Handler.Warn(ctx, fmt.Sprintf("Unrecoverable error saving %v to DB: %v", item.Key(), err), ActionWriteDirty, item)
+			c.Handler.Fail(ctx, err, item)
 			fail++
 			// For unrecoverable errors, we don't re-add to unCommitted for this transaction's retry.
 			// The item remains out of the dirty list. Consider if this is the desired behavior or if it should be re-added to dirty for a *future* attempt.
@@ -309,7 +342,7 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 			} else {
 				// Item was purged from cache between DB save and this update.
 				// It was saved to DB, but won't be re-added to cache here.
-				c.handler.Info(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), ActionWriteDirty, item)
+				c.Handler.Info(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), ActionWriteDirty, item)
 			}
 		}()
 		success++
@@ -317,15 +350,15 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 	})
 
 	if fail > 0 { // If any save within the batch failed (recoverably or unrecoverably for that item)
-		errRollback := c.handler.RollbackTx(ctx, tx)
-		if errRollback != nil && c.handler.IsRecoverable(ctx, errRollback) {
-			c.handler.Info(ctx, fmt.Sprintf("Error rolling back transaction after failures, will retry: %v", errRollback), ActionWriteDirty)
+		errRollback := c.Handler.RollbackTx(ctx, tx)
+		if errRollback != nil && c.Handler.IsRecoverable(ctx, errRollback) {
+			c.Handler.Info(ctx, fmt.Sprintf("Error rolling back transaction after failures, will retry: %v", errRollback), ActionWriteDirty)
 		} else if errRollback != nil {
-			c.handler.Warn(ctx, fmt.Sprintf("Error rolling back transaction after failures, batach aborted: %v", errRollback), ActionWriteDirty)
+			c.Handler.Warn(ctx, fmt.Sprintf("Error rolling back transaction after failures, batach aborted: %v", errRollback), ActionWriteDirty)
 			fail += len(unCommitted)
 			// unCommitted contains all successfully saved items in this batch.
-			// notify the handler they are lost.
-			c.handler.Fail(ctx, err, unCommitted...)
+			// notify the Handler they are lost.
+			c.Handler.Fail(ctx, err, unCommitted...)
 			return
 		}
 		// Re-mark all items that were part of this transaction attempt as dirty if the transaction failed.
@@ -335,17 +368,17 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 			c.dirty.Store(itemFromBatch.Key(), true)
 		}
 
-		c.handler.Info(ctx, fmt.Sprintf("Transaction rolled back. Error syncing cache to DB: %v failures, %v successes within batch. All %d items in batch marked for retry.", fail, success, len(unCommitted)), ActionWriteDirty)
+		c.Handler.Info(ctx, fmt.Sprintf("Transaction rolled back. Error syncing cache to DB: %v failures, %v successes within batch. All %d items in batch marked for retry.", fail, success, len(unCommitted)), ActionWriteDirty)
 		return
 	}
 
 	// All individual saves were successful, try to commit.
-	err = c.handler.CommitTx(ctx, tx)
+	err = c.Handler.CommitTx(ctx, tx)
 	if err != nil {
 		fail++ // Mark a failure for the commit itself.
 		// If commit fails, all items in the batch should be retried if the error is recoverable.
-		if c.handler.IsRecoverable(ctx, err) {
-			c.handler.Warn(ctx, fmt.Sprintf("Recoverable error from CommitTx, batch will be retried: %v", err), ActionWriteDirty)
+		if c.Handler.IsRecoverable(ctx, err) {
+			c.Handler.Warn(ctx, fmt.Sprintf("Recoverable error from CommitTx, batch will be retried: %v", err), ActionWriteDirty)
 			for _, item := range unCommitted { // unCommitted contains all successfully saved items in this batch
 				c.dirty.Store(item.Key(), true)
 			}
@@ -353,17 +386,17 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 			// Unrecoverable commit error. Data might be in an inconsistent state.
 			// Items were individually saved but commit failed. DB state is uncertain.
 			// These items are NOT re-added to dirty list, effectively lost from cache's perspective of being dirty.
-			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from CommitTx, batch data might be inconsistent in DB and will NOT be retried by cache: %v", err), ActionWriteDirty)
+			c.Handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from CommitTx, batch data might be inconsistent in DB and will NOT be retried by cache: %v", err), ActionWriteDirty)
 			// unCommitted items are not re-added to dirty list.
-			// notify handler of data loss.
-			c.handler.Fail(ctx, err, unCommitted...)
+			// notify Handler of data loss.
+			c.Handler.Fail(ctx, err, unCommitted...)
 		}
-		c.handler.Warn(ctx, fmt.Sprintf("Error committing transaction: %v failures, %v successes", fail, success), ActionWriteDirty)
+		c.Handler.Warn(ctx, fmt.Sprintf("Error committing transaction: %v failures, %v successes", fail, success), ActionWriteDirty)
 		return
 	}
 
 	// Transaction committed successfully. Items are no longer dirty.
-	c.handler.Info(ctx, fmt.Sprintf("Completed DB Sync, flushed %d records successfully in transaction.", success), ActionWriteDirty)
+	c.Handler.Info(ctx, fmt.Sprintf("Completed DB Sync, flushed %d records successfully in transaction.", success), ActionWriteDirty)
 }
 
 // ClearDirty forcefully empties the dirty queue.
@@ -402,7 +435,7 @@ func (c *LazyWriterCacheLF[K, T]) evictionProcessor(ctx context.Context) {
 			// FIFO queue is empty, but cache size > limit.
 			// This might happen if all remaining items are dirty and constantly re-queued,
 			// or if there's a discrepancy. Stop eviction for this cycle.
-			c.handler.Info(ctx, "Eviction attempted on empty FIFO queue while cache size > limit.", ActionEvict)
+			c.Handler.Info(ctx, "Eviction attempted on empty FIFO queue while cache size > limit.", ActionEvict)
 			return
 		}
 
@@ -411,12 +444,12 @@ func (c *LazyWriterCacheLF[K, T]) evictionProcessor(ctx context.Context) {
 			// Item is dirty, cannot evict. Put it back at the end of the queue.
 			// Log if the item is actually still in the cache.
 			if item, itemInCache := c.cache.Load(keyToEvict); itemInCache {
-				c.handler.Warn(ctx, "Dirty item at head of purge queue; eviction paused for this cycle.", ActionEvict, item)
+				c.Handler.Warn(ctx, "Dirty item at head of purge queue; eviction paused for this cycle.", ActionEvict, item)
 			} else {
 				// It's unusual for a key to be in 'dirty' but not in 'cache'.
 				// It might have been deleted from cache but not yet from dirty list by another process.
 				// In this case, just remove it from dirty list as it's not in cache.
-				c.handler.Warn(ctx, fmt.Sprintf("Dirty key %v (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), ActionEvict)
+				c.Handler.Warn(ctx, fmt.Sprintf("Dirty key %v (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), ActionEvict)
 				c.dirty.Delete(keyToEvict) // Remove from dirty as it's not in cache.
 				_, _ = c.fifo.Dequeue()    // remove the head of the fifo
 				// there is no need to check the dequeued item is also the item we peeked at because

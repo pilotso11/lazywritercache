@@ -813,7 +813,7 @@ func TestGetFromLocked_CompleteCodeCoverage(t *testing.T) {
 
 	// Test when item is not in cache but LookupOnMiss is true
 	// The NoOpReaderWriter's Find method always returns an error, so the item won't be found
-	// GetFromLocked doesn't propagate the error from handler.Find, it just returns found=false
+	// GetFromLocked doesn't propagate the error from Handler.Find, it just returns found=false
 	item, found, err = cache.GetFromLocked("test2")
 	assert.NoError(t, err, "GetFromLocked should not return an error when item is not found")
 	assert.False(t, found, "Item should not be found via lookup because NoOpReaderWriter always returns an error")
@@ -824,7 +824,7 @@ func TestGetFromLocked_CompleteCodeCoverage(t *testing.T) {
 }
 
 func TestSaveDirtyToDB_CompleteCodeCoverage(t *testing.T) {
-	// Create a cache with a handler that will return an error on Save
+	// Create a cache with a Handler that will return an error on Save
 	handler := NewNoOpReaderWriter[testItem](newTestItem)
 	cfg := Config[string, testItem]{
 		handler:      handler,
@@ -909,7 +909,7 @@ func (g *CustomReaderWriter[T]) Save(item T, _ interface{}) error {
 
 // Test for line 300 - updating an existing DB record
 func TestSaveDirtyToDB_UpdateExistingRecord(t *testing.T) {
-	// Create a custom handler that simulates finding an existing record
+	// Create a custom Handler that simulates finding an existing record
 	handler := NewCustomReaderWriter[testItem](newTestItem)
 	handler.existingKeys["existing"] = true
 
@@ -940,7 +940,7 @@ func TestSaveDirtyToDB_UpdateExistingRecord(t *testing.T) {
 }
 
 func TestSaveToDB_DeadlockRetry(t *testing.T) {
-	// Create a custom handler that simulates finding an existing record
+	// Create a custom Handler that simulates finding an existing record
 	handler := NewCustomReaderWriter[testItem](newTestItem)
 	handler.existingKeys["existing"] = true
 
@@ -980,7 +980,7 @@ func TestSaveToDB_DeadlockRetry(t *testing.T) {
 }
 
 func TestSaveToDB_NonRecoverableError(t *testing.T) {
-	// Create a custom handler that simulates finding an existing record
+	// Create a custom Handler that simulates finding an existing record
 	handler := NewCustomReaderWriter[testItem](newTestItem)
 	handler.existingKeys["existing"] = true
 

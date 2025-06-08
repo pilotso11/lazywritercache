@@ -70,7 +70,7 @@ func newtestItemLF[K comparable](key K) testItemLF[K] {
 func newNoOpTestConfigLF[K comparable]() ConfigLF[K, testItemLF[K]] {
 	readerWriter := NewNoOpReaderWriterLF[K, testItemLF[K]](newtestItemLF)
 	return ConfigLF[K, testItemLF[K]]{
-		handler:      readerWriter,
+		Handler:      readerWriter,
 		Limit:        1000,
 		LookupOnMiss: false,
 		WriteFreq:    0,
@@ -458,7 +458,7 @@ func Test_GetAndReleaseLF(t *testing.T) {
 }
 
 // Test_GetAndReleaseWithForcedPanicLF tests the behavior when LookupOnMiss is true
-// and the underlying data handler (NoOpReaderWriterLF) is configured to panic.
+// and the underlying data Handler (NoOpReaderWriterLF) is configured to panic.
 // It verifies that a call to Load results in a panic.
 func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	ctx := context.Background()
@@ -477,8 +477,8 @@ func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
-	// Configure the mock handler to panic on the next Find operation
-	cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]]).panicOnNext.Store(true)
+	// Configure the mock Handler to panic on the next Find operation
+	cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]]).panicOnNext.Store(true)
 	assert.Panics(t, func() {
 		_, ok := cache.Load(ctx, "test4_non_existent_to_trigger_find") // Key doesn't exist, so Find will be called
 		assert.Falsef(t, ok, "should not be found or panic should prevent reaching this")
@@ -573,7 +573,7 @@ func TestNewDefaultConfigLF(t *testing.T) {
 	config := NewDefaultConfigLF[string, testItemLF[string]](handler)
 
 	// Verify default values
-	assert.NotNil(t, config.handler, "Handler should not be nil")
+	assert.NotNil(t, config.Handler, "Handler should not be nil")
 	assert.Equal(t, 10000, config.Limit, "Default limit should be 10000")
 	assert.True(t, config.LookupOnMiss, "LookupOnMiss should be true by default")
 	assert.Equal(t, 500*time.Millisecond, config.WriteFreq, "Default WriteFreq should be 500ms")
@@ -718,7 +718,7 @@ func TestRequeueRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -739,7 +739,7 @@ func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -759,7 +759,7 @@ func TestRequeueCommitRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -779,7 +779,7 @@ func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -798,7 +798,7 @@ func TestRequeueBeginRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -818,7 +818,7 @@ func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -840,7 +840,7 @@ func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -864,7 +864,7 @@ func TestPanicHandlerLF(t *testing.T) {
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
 	cfg := newNoOpTestConfigLF[string]()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -876,7 +876,7 @@ func TestPanicHandlerLF(t *testing.T) {
 	// The panic occurs within the c.dirty.Range. The item causing the panic (or the one being processed)
 	// might have already been deleted from dirty optimistically.
 	// The transaction will be rolled back due to the panic (if it happens before commit/rollback call)
-	// or the panic handler itself. Items in unCommitted might not be re-added.
+	// or the panic Handler itself. Items in unCommitted might not be re-added.
 	// The exact dirty count depends on when the panic happens relative to dirty.Delete and unCommitted append.
 	// Given the NoOp mock, the panic is likely in RollbackTx.
 	// If panic in RollbackTx: unCommitted items are not re-added.
@@ -893,7 +893,7 @@ func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
 	cfg.AllowConcurrentWrites = true // Explicitly enable
 	cfg.WriteFreq = 0                // Disable periodic writer for manual flush
 
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
@@ -935,7 +935,7 @@ func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
 	cfg.AllowConcurrentWrites = false // Explicitly disable
 	cfg.WriteFreq = 0                 // Disable periodic writer
 
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
@@ -963,7 +963,7 @@ func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
 	ctx := context.Background()
 	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 0 // Disable periodic writer for manual flush
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
@@ -991,7 +991,7 @@ func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
 	ctx := context.Background()
 	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 0
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
