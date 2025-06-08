@@ -38,6 +38,7 @@ type NoOpReaderWriterLF[T CacheableLF] struct {
 	errorOnNext     *atomic.Value
 	warnCount       *atomic.Int64
 	infoCount       *atomic.Int64
+	fails           *atomic.Int64
 	logBuffer       *strings.Builder
 }
 
@@ -53,6 +54,7 @@ func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T) NoOpR
 		errorOnNext:     &atomic.Value{},
 		warnCount:       &atomic.Int64{},
 		infoCount:       &atomic.Int64{},
+		fails:           &atomic.Int64{},
 		logBuffer:       &buf,
 	}
 }
@@ -157,4 +159,8 @@ func (g NoOpReaderWriterLF[T]) IsRecoverable(_ context.Context, err error) bool 
 		return true
 	}
 	return false
+}
+
+func (g NoOpReaderWriterLF[T]) Fail(_ context.Context, _ error, _ ...T) {
+	g.fails.Add(1)
 }

@@ -163,3 +163,7 @@ func (g ReaderWriteLF[T]) IsRecoverable(_ context.Context, err error) bool {
 		return false
 	}
 }
+
+func (g ReaderWriteLF[T]) Fail(_ context.Context, _ error, _ ...T) {
+	// nothing we can do here.
+}
