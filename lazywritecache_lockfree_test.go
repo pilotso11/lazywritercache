@@ -25,6 +25,7 @@ package lazywritercache
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -36,40 +37,40 @@ import (
 )
 
 // testItemLF is a basic implementation of CacheableLF for testing purposes.
-type testItemLF struct {
-	id string
+type testItemLF[K comparable] struct {
+	id K
 }
 
 // Key returns the identifier for the testItemLF.
-func (i testItemLF) Key() string {
+func (i testItemLF[K]) Key() K {
 	return i.id
 }
 
 // CopyKeyDataFrom copies the key from another CacheableLF item.
 // In a real scenario, this would copy database-managed fields.
-func (i testItemLF) CopyKeyDataFrom(from CacheableLF) CacheableLF {
+func (i testItemLF[K]) CopyKeyDataFrom(from CacheableLF[K]) CacheableLF[K] {
 	i.id = from.Key()
 	return i
 }
 
 // String returns the string representation of the testItemLF's id.
-func (i testItemLF) String() string {
-	return i.id
+func (i testItemLF[K]) String() string {
+	return fmt.Sprintf("%v", i.id)
 }
 
 // newtestItemLF creates a new testItemLF with the given key.
-func newtestItemLF(key string) testItemLF {
-	return testItemLF{
+func newtestItemLF[K comparable](key K) testItemLF[K] {
+	return testItemLF[K]{
 		id: key,
 	}
 }
 
 // newNoOpTestConfigLF creates a default configuration for testing,
 // using a NoOpReaderWriterLF and disabling periodic writes and purges.
-func newNoOpTestConfigLF() ConfigLF[testItemLF] {
-	readerWriter := NewNoOpReaderWriterLF[testItemLF](newtestItemLF)
-	return ConfigLF[testItemLF]{
-		handler:      readerWriter,
+func newNoOpTestConfigLF[K comparable]() ConfigLF[K, testItemLF[K]] {
+	readerWriter := NewNoOpReaderWriterLF[K, testItemLF[K]](newtestItemLF)
+	return ConfigLF[K, testItemLF[K]]{
+		Handler:      readerWriter,
 		Limit:        1000,
 		LookupOnMiss: false,
 		WriteFreq:    0,
@@ -82,9 +83,9 @@ func newNoOpTestConfigLF() ConfigLF[testItemLF] {
 // and that loading a missing item returns false.
 func TestCacheStoreLoadLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	cache.Save(item)
@@ -100,7 +101,6 @@ func TestCacheStoreLoadLF(t *testing.T) {
 
 	_, ok = cache.Load(ctx, "missing")
 	assert.Falsef(t, ok, "not loaded missing")
-
 }
 
 // TestCacheDirtyListLF tests the management of the dirty items list.
@@ -108,9 +108,9 @@ func TestCacheStoreLoadLF(t *testing.T) {
 // already dirty item doesn't change the dirty count.
 func TestCacheDirtyListLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test11"}
-	itemLF := testItemLF{id: "testLFLF"}
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test11"}
+	itemLF := testItemLF[string]{id: "testLFLF"}
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	cache.Save(item)
@@ -134,7 +134,7 @@ func TestCacheDirtyListLF(t *testing.T) {
 // like Load and Save do not cause panics, even when items are missing.
 func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
 	ctx := context.Background()
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	assert.NotPanics(t, func() {
@@ -142,7 +142,7 @@ func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
 	}, "get and Unlock")
 
 	assert.NotPanics(t, func() {
-		item := testItemLF{id: "test"}
+		item := testItemLF[string]{id: "test"}
 		cache.Load(ctx, "missing")
 		cache.Save(item)
 	}, "get and Save")
@@ -199,14 +199,14 @@ func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
 // It populates the cache and then simulates nThreads concurrently reading random keys.
 func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
 	ctx := context.Background()
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		keys = append(keys, id)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.Save(item)
 	}
 
@@ -230,12 +230,12 @@ func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
 // cacheWriteLF is a helper function for benchmarking cache write operations.
 // It repeatedly saves items to the cache, cycling through keys up to cacheSize.
 func cacheWriteLF(b *testing.B, cacheSize int) {
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	for i := 0; i < b.N; i++ {
 		id := strconv.Itoa(i % cacheSize)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.Save(item)
 	}
 	b.ReportAllocs()
@@ -246,14 +246,14 @@ func cacheWriteLF(b *testing.B, cacheSize int) {
 func cacheReadLF(b *testing.B, cacheSize int) {
 	// init
 	ctx := context.Background()
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	var keys []string
 	for i := 0; i < cacheSize; i++ {
 		id := strconv.Itoa(i % cacheSize)
 		keys = append(keys, id)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.Save(item)
 	}
 
@@ -275,14 +275,14 @@ func cacheReadLF(b *testing.B, cacheSize int) {
 // evicting items in FIFO order (oldest items first, after they are no longer dirty).
 func TestCacheEvictionLF(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.Limit = 20
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 
 	for i := 0; i < 30; i++ {
 		id := strconv.Itoa(i)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.Save(item)
 	}
 	assert.Equal(t, 30, cache.cache.Size())
@@ -319,7 +319,7 @@ func TestCacheEvictionLF(t *testing.T) {
 // but the cache still has items. This represents an incorrect state in the underlying cache.
 func TestCacheEvictionEmptyFIFOLF(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.Limit = 5 // Set a small limit
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
@@ -327,7 +327,7 @@ func TestCacheEvictionEmptyFIFOLF(t *testing.T) {
 	// Add items to the cache directly without using the FIFO queue
 	for i := 0; i < 10; i++ {
 		id := strconv.Itoa(i)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		// Use direct access to cache map to bypass the normal Save method
 		// which would add items to the FIFO queue
 		cache.cache.Store(id, item)
@@ -349,14 +349,14 @@ func TestCacheEvictionEmptyFIFOLF(t *testing.T) {
 // but is not in the cache because it has been deleted while dirty.
 func TestCacheEvictionDirtyItemNotInCacheLF(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.Limit = 5 // Set a small limit
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 
 	// Add an item to the cache and mark it as dirty
 	testKey := "test-key"
-	item := testItemLF{id: testKey}
+	item := testItemLF[string]{id: testKey}
 	cache.Save(item)
 
 	// Verify the item is in the cache and marked as dirty
@@ -379,7 +379,7 @@ func TestCacheEvictionDirtyItemNotInCacheLF(t *testing.T) {
 	// Make sure the cache size is above the limit to trigger eviction
 	for i := 0; i < 10; i++ {
 		id := strconv.Itoa(i)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.cache.Store(id, item)
 	}
 
@@ -406,7 +406,7 @@ func TestCacheEvictionDirtyItemNotInCacheLF(t *testing.T) {
 // where one evicts the head between peek and removing the item.
 func TestCacheEvictionRaceConditionLF(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.Limit = 5 // Set a small limit
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
@@ -414,7 +414,7 @@ func TestCacheEvictionRaceConditionLF(t *testing.T) {
 	// Add items to the cache
 	for i := 0; i < 10; i++ {
 		id := strconv.Itoa(i)
-		item := testItemLF{id: id}
+		item := testItemLF[string]{id: id}
 		cache.Save(item)
 	}
 
@@ -443,9 +443,9 @@ func TestCacheEvictionRaceConditionLF(t *testing.T) {
 // It ensures items can be saved and then retrieved.
 func Test_GetAndReleaseLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	cache.Save(item)
@@ -458,13 +458,13 @@ func Test_GetAndReleaseLF(t *testing.T) {
 }
 
 // Test_GetAndReleaseWithForcedPanicLF tests the behavior when LookupOnMiss is true
-// and the underlying data handler (NoOpReaderWriterLF) is configured to panic.
+// and the underlying data Handler (NoOpReaderWriterLF) is configured to panic.
 // It verifies that a call to Load results in a panic.
 func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 
@@ -477,8 +477,8 @@ func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
-	// Configure the mock handler to panic on the next Find operation
-	cfg.handler.(NoOpReaderWriterLF[testItemLF]).panicOnNext.Store(true)
+	// Configure the mock Handler to panic on the next Find operation
+	cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]]).panicOnNext.Store(true)
 	assert.Panics(t, func() {
 		_, ok := cache.Load(ctx, "test4_non_existent_to_trigger_find") // Key doesn't exist, so Find will be called
 		assert.Falsef(t, ok, "should not be found or panic should prevent reaching this")
@@ -491,7 +491,7 @@ func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 // It verifies that the cache stats can be marshaled to JSON and then
 // unmarshaled back into a map, checking for the presence and initial value of 'hits'.
 func TestCacheStats_JSONLF(t *testing.T) {
-	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
+	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	jsonStr := cache.JSON()
@@ -508,10 +508,10 @@ func TestCacheStats_JSONLF(t *testing.T) {
 // TestRangeLF tests the Range method for iterating over all items in the cache.
 // It verifies that the provided action function is called for each item.
 func TestRangeLF(t *testing.T) {
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	item3 := testItemLF{id: "test3"}
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	item3 := testItemLF[string]{id: "test3"}
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	cache.Save(item)
@@ -519,7 +519,7 @@ func TestRangeLF(t *testing.T) {
 	cache.Save(item3)
 
 	n := 0
-	cache.Range(func(k string, v testItemLF) bool {
+	cache.Range(func(k string, v testItemLF[string]) bool {
 		n++
 		return true // Continue iteration
 	})
@@ -530,10 +530,10 @@ func TestRangeLF(t *testing.T) {
 // TestRangeAbortLF tests the ability to abort iteration in the Range method.
 // It verifies that if the action function returns false, the iteration stops.
 func TestRangeAbortLF(t *testing.T) {
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	item3 := testItemLF{id: "test3"}
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	item3 := testItemLF[string]{id: "test3"}
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	cache.Save(item)
@@ -541,7 +541,7 @@ func TestRangeAbortLF(t *testing.T) {
 	cache.Save(item3)
 
 	n := 0
-	cache.Range(func(k string, v testItemLF) bool {
+	cache.Range(func(k string, v testItemLF[string]) bool {
 		n++
 		if n == 2 {
 			return false // Stop iteration
@@ -557,8 +557,8 @@ func TestRangeAbortLF(t *testing.T) {
 func TestNoGoroutineLeaksLF(t *testing.T) {
 	defer goleak.VerifyNone(t) // Verifies no goroutines leaked at the end of the test
 	ctx, cancel := context.WithCancel(context.Background())
-	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, newNoOpTestConfigLF())
-	cache.Save(testItemLF{id: "test"})
+	cache := NewLazyWriterCacheWithContextLF[string, testItemLF[string]](ctx, newNoOpTestConfigLF[string]())
+	cache.Save(testItemLF[string]{id: "test"})
 	time.Sleep(100 * time.Millisecond) // Allow time for any goroutines to start
 	cancel()                           // Signal goroutines to stop
 	cache.Shutdown()                   // Explicitly shutdown
@@ -569,11 +569,11 @@ func TestNoGoroutineLeaksLF(t *testing.T) {
 // It verifies that the returned configuration has the expected default values
 // for Limit, LookupOnMiss, WriteFreq, PurgeFreq, and FlushOnShutdown.
 func TestNewDefaultConfigLF(t *testing.T) {
-	handler := NewNoOpReaderWriterLF[testItemLF](newtestItemLF)
-	config := NewDefaultConfigLF[testItemLF](handler)
+	handler := NewNoOpReaderWriterLF[string, testItemLF[string]](newtestItemLF)
+	config := NewDefaultConfigLF[string, testItemLF[string]](handler)
 
 	// Verify default values
-	assert.NotNil(t, config.handler, "Handler should not be nil")
+	assert.NotNil(t, config.Handler, "Handler should not be nil")
 	assert.Equal(t, 10000, config.Limit, "Default limit should be 10000")
 	assert.True(t, config.LookupOnMiss, "LookupOnMiss should be true by default")
 	assert.Equal(t, 500*time.Millisecond, config.WriteFreq, "Default WriteFreq should be 500ms")
@@ -592,7 +592,7 @@ func TestEmptyCacheableLF(t *testing.T) {
 	assert.Equal(t, "", key, "EmptyCacheableLF.Key should return empty string")
 
 	// Test CopyKeyDataFrom method
-	item := testItemLF{id: "test"}
+	item := testItemLF[string]{id: "test"}
 	result := empty.CopyKeyDataFrom(item)
 	assert.Equal(t, item, result, "EmptyCacheableLF.CopyKeyDataFrom should return the input item")
 }
@@ -601,9 +601,9 @@ func TestEmptyCacheableLF(t *testing.T) {
 // It verifies that after saving items (making them dirty),
 // calling ClearDirty empties the dirty list.
 func TestClearDirtyLF(t *testing.T) {
-	item := testItemLF{id: "test1"}
-	item2 := testItemLF{id: "test2"}
-	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
+	item := testItemLF[string]{id: "test1"}
+	item2 := testItemLF[string]{id: "test2"}
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
 
 	// Add items to the cache and make them dirty
@@ -622,15 +622,15 @@ func TestClearDirtyLF(t *testing.T) {
 // the DirtyWrites counter is incremented.
 func TestPeriodicSaveLF(t *testing.T) {
 	// Create a cache with a short write frequency
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 50 * time.Millisecond
 
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	// Add items to the cache
-	cache.Save(testItemLF{id: "test1"})
-	cache.Save(testItemLF{id: "test2"})
+	cache.Save(testItemLF[string]{id: "test1"})
+	cache.Save(testItemLF[string]{id: "test2"})
 
 	// Verify items are marked as dirty
 	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
@@ -651,17 +651,17 @@ func TestPeriodicSaveLF(t *testing.T) {
 // reduced to the limit and the Evictions counter is incremented.
 func TestPeriodicEvictionsLF(t *testing.T) {
 	// Create a cache with a small limit and short purge frequency
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.Limit = 5
 	cfg.PurgeFreq = 50 * time.Millisecond
 	cfg.WriteFreq = 10 * time.Millisecond // Need to flush dirty items for eviction to work
 
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	// Add more items than the limit
 	for i := 0; i < 10; i++ {
-		cache.Save(testItemLF{id: strconv.Itoa(i)})
+		cache.Save(testItemLF[string]{id: strconv.Itoa(i)})
 	}
 
 	// Verify all items are in the cache initially
@@ -684,16 +684,16 @@ func TestPeriodicEvictionsLF(t *testing.T) {
 // that the dirty items are flushed.
 func TestFlushOnShutdownLF(t *testing.T) {
 	// Create a cache with FlushOnShutdown enabled
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 1 * time.Hour // Long enough that it won't trigger during the test
 	cfg.FlushOnShutdown = true
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cache := NewLazyWriterCacheWithContextLF[testItemLF](ctx, cfg)
+	cache := NewLazyWriterCacheWithContextLF[string, testItemLF[string]](ctx, cfg)
 
 	// Add items to the cache
-	cache.Save(testItemLF{id: "test1"})
-	cache.Save(testItemLF{id: "test2"})
+	cache.Save(testItemLF[string]{id: "test1"})
+	cache.Save(testItemLF[string]{id: "test2"})
 
 	// Verify items are marked as dirty
 	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
@@ -715,10 +715,10 @@ func TestFlushOnShutdownLF(t *testing.T) {
 // when a recoverable error (e.g., "save deadlock") occurs during a Save operation in Flush.
 func TestRequeueRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -736,10 +736,10 @@ func TestRequeueRecoverableErrLF(t *testing.T) {
 // The transaction is rolled back, but the failing item is not marked for retry.
 func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -756,10 +756,10 @@ func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
 // when a recoverable error (e.g., "commit deadlock") occurs during the CommitTx operation in Flush.
 func TestRequeueCommitRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -776,10 +776,10 @@ func TestRequeueCommitRecoverableErrLF(t *testing.T) {
 // The items are considered lost from the dirty perspective.
 func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -795,10 +795,10 @@ func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 // when a recoverable error occurs during BeginTx.
 func TestRequeueBeginRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -815,10 +815,10 @@ func TestRequeueBeginRecoverableErrLF(t *testing.T) {
 // when a recoverable error occurs during Save, followed by another recoverable error during RollbackTx.
 func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -837,10 +837,10 @@ func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 // Items are not re-queued because the unrecoverable rollback implies the batch is aborted.
 func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -861,10 +861,10 @@ func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
 // One item (the one causing the panic during its processing) is lost from dirty.
 func TestPanicHandlerLF(t *testing.T) {
 	ctx := context.Background()
-	item := testItemLF{id: "test1"}
-	itemLF := testItemLF{id: "testLF"}
-	cfg := newNoOpTestConfigLF()
-	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	item := testItemLF[string]{id: "test1"}
+	itemLF := testItemLF[string]{id: "testLF"}
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
 	cache := NewLazyWriterCacheLF(cfg)
 	defer cache.Shutdown()
 	cache.Save(item)
@@ -876,7 +876,7 @@ func TestPanicHandlerLF(t *testing.T) {
 	// The panic occurs within the c.dirty.Range. The item causing the panic (or the one being processed)
 	// might have already been deleted from dirty optimistically.
 	// The transaction will be rolled back due to the panic (if it happens before commit/rollback call)
-	// or the panic handler itself. Items in unCommitted might not be re-added.
+	// or the panic Handler itself. Items in unCommitted might not be re-added.
 	// The exact dirty count depends on when the panic happens relative to dirty.Delete and unCommitted append.
 	// Given the NoOp mock, the panic is likely in RollbackTx.
 	// If panic in RollbackTx: unCommitted items are not re-added.
@@ -889,12 +889,12 @@ func TestPanicHandlerLF(t *testing.T) {
 // It uses goroutines to call Flush simultaneously and checks that the dirty list is cleared.
 func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.AllowConcurrentWrites = true // Explicitly enable
 	cfg.WriteFreq = 0                // Disable periodic writer for manual flush
 
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	cache.Save(newtestItemLF("item1"))
@@ -931,12 +931,12 @@ func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
 // when AllowConcurrentWrites is false.
 func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.AllowConcurrentWrites = false // Explicitly disable
 	cfg.WriteFreq = 0                 // Disable periodic writer
 
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	cache.Save(newtestItemLF("item1"))
@@ -961,10 +961,10 @@ func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
 // the batch is aborted, a warning is logged, and items remain dirty.
 func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 0 // Disable periodic writer for manual flush
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	cache.Save(newtestItemLF("item1"))
@@ -989,10 +989,10 @@ func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
 // not re-added to the dirty list.
 func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
 	ctx := context.Background()
-	cfg := newNoOpTestConfigLF()
+	cfg := newNoOpTestConfigLF[string]()
 	cfg.WriteFreq = 0
-	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
-	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	mockHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	cache := NewLazyWriterCacheLF[string, testItemLF[string]](cfg)
 	defer cache.Shutdown()
 
 	cache.Save(newtestItemLF("itemToFailSave"))
@@ -1017,4 +1017,59 @@ func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
 	// Because rollback failed unrecoverably, the `fail += len(unCommitted)` line runs,
 	// and items are NOT re-added to dirty list.
 	assert.Equal(t, 1, cache.dirty.Size(), "Items should NOT be re-added to dirty list after unrecoverable rollback")
+}
+
+// TestCacheStoreLoadLF_Int tests the basic Save and Load functionality with an int64 key instead of a string.
+// It verifies that items saved to the cache can be retrieved correctly,
+// and that loading a missing item returns false, but tests the flexibilty to use any comparable type as the key.
+func TestCacheStoreLoadLF_Int(t *testing.T) {
+	ctx := context.Background()
+	item := testItemLF[int64]{id: 1}
+	itemLF := testItemLF[int64]{id: 2}
+	cache := NewLazyWriterCacheLF[int64, testItemLF[int64]](newNoOpTestConfigLF[int64]())
+	defer cache.Shutdown()
+
+	cache.Save(item)
+	cache.Save(itemLF)
+
+	item3, ok := cache.Load(ctx, 1)
+	assert.Truef(t, ok, "loaded test")
+	assert.Equal(t, item, item3)
+
+	item4, ok := cache.Load(ctx, 2)
+	assert.Truef(t, ok, "loaded testLF")
+	assert.Equal(t, itemLF, item4)
+
+	_, ok = cache.Load(ctx, 3)
+	assert.Falsef(t, ok, "not loaded missing")
+}
+
+type CustomKey struct {
+	part1 int64
+	part2 string
+}
+
+// TestCacheStoreLoadLF_CustomKey tests the basic Save and Load functionality with an custom struct type key instead of a string.
+// It verifies that items saved to the cache can be retrieved correctly,
+// and that loading a missing item returns false, but tests the flexibilty to use any comparable type as the key.
+func TestCacheStoreLoadLF_CustomKey(t *testing.T) {
+	ctx := context.Background()
+	item := testItemLF[CustomKey]{CustomKey{part1: 1, part2: "one"}}
+	itemLF := testItemLF[CustomKey]{CustomKey{part1: 2, part2: "one"}}
+	cache := NewLazyWriterCacheLF[CustomKey, testItemLF[CustomKey]](newNoOpTestConfigLF[CustomKey]())
+	defer cache.Shutdown()
+
+	cache.Save(item)
+	cache.Save(itemLF)
+
+	item3, ok := cache.Load(ctx, CustomKey{part1: 1, part2: "one"})
+	assert.Truef(t, ok, "loaded test")
+	assert.Equal(t, item, item3)
+
+	item4, ok := cache.Load(ctx, CustomKey{part1: 2, part2: "one"})
+	assert.Truef(t, ok, "loaded testLF")
+	assert.Equal(t, itemLF, item4)
+
+	_, ok = cache.Load(ctx, CustomKey{part1: 3, part2: "one"})
+	assert.Falsef(t, ok, "not loaded missing")
 }

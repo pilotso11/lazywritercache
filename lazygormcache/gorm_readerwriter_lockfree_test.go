@@ -26,7 +26,7 @@ func (i testDBItemLF) Key() string {
 	return i.Value
 }
 
-func (i testDBItemLF) CopyKeyDataFrom(from lazywritercache.CacheableLF) lazywritercache.CacheableLF {
+func (i testDBItemLF) CopyKeyDataFrom(from lazywritercache.CacheableLF[string]) lazywritercache.CacheableLF[string] {
 	i.Value = from.Key()
 	return i
 }
@@ -50,19 +50,19 @@ type MockLoggerLF struct {
 	LastAction  string
 }
 
-func (m *MockLoggerLF) Info(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Info(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
 	m.InfoCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Warn(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Warn(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
 	m.WarnCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Error(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Error(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
 	m.ErrorCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
@@ -89,7 +89,7 @@ func TestNewGormCacheReaderWriteLF(t *testing.T) {
 	}
 
 	// Test creating a new ReaderWriteLF
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 
 	// Verify the ReaderWriteLF was created correctly
 	assert.NotNil(t, rw.db, "DB should not be nil")
@@ -116,7 +116,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Find with a successful query
 	mock.ExpectQuery(`SELECT * FROM "test_db_item_lves" WHERE "test_db_item_lves"."value" = $1 LIMIT $2`).
@@ -180,7 +180,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 		t.Fatalf("Error creating gorm DB: %v", err)
 	}
 
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 
 	// Test Save with a successful query
 	mock.ExpectBegin()
@@ -229,7 +229,7 @@ func TestReaderWriteLF_BeginTx(t *testing.T) {
 	}
 
 	// Test BeginTx with UseTransactions = true
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 
@@ -266,7 +266,7 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	}
 
 	// Test CommitTx with UseTransactions = true
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 	mock.ExpectCommit()
@@ -303,7 +303,7 @@ func TestReaderWriteLF_RollbackTx(t *testing.T) {
 	}
 
 	// Test CommitTx with UseTransactions = true
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 	mock.ExpectRollback()
@@ -338,7 +338,7 @@ func TestReaderWriteLF_RollbackTxError(t *testing.T) {
 	}
 
 	// Test CommitTx with UseTransactions = true
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 
 	// Force an exception
 	rw.UseTransactions = true
@@ -373,25 +373,25 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	}
 
 	// Test Info with a logger
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
 	// Test Info without an item
-	rw.Info(ctx, "test message", "test action")
+	rw.Info(ctx, "test message", lazywritercache.ActionEvict)
 	assert.True(t, logger.InfoCalled, "Info should call the logger's Info method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action", logger.LastAction, "Action should match")
+	assert.Equal(t, "evict", logger.LastAction, "Action should match")
 
 	// Test Info with an item
 	item := newTestDBItemLF("item1")
-	rw.Info(ctx, "test message with item", "test action with item", item)
+	rw.Info(ctx, "test message with item", lazywritercache.ActionEvict, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
+	assert.Equal(t, "evict", logger.LastAction, "Action should match")
 
 	// Test Info without a logger
 	rw.Logger = nil
-	rw.Info(ctx, "test message without logger", "test action without logger")
+	rw.Info(ctx, "test message without logger", lazywritercache.ActionEvict)
 	// No assertion needed, just make sure it doesn't panic
 }
 
@@ -413,25 +413,25 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	}
 
 	// Test Warn with a logger
-	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	rw := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 	logger := &MockLoggerLF{}
 	rw.Logger = logger
 
 	// Test Warn without an item
-	rw.Warn(ctx, "test message", "test action")
+	rw.Warn(ctx, "test message", lazywritercache.ActionWriteDirty)
 	assert.True(t, logger.WarnCalled, "Warn should call the logger's Warn method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action", logger.LastAction, "Action should match")
+	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
 
 	// Test Warn with an item
 	item := newTestDBItemLF("item1")
-	rw.Warn(ctx, "test message with item", "test action with item", item)
+	rw.Warn(ctx, "test message with item", lazywritercache.ActionWriteDirty, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
+	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
 
 	// Test Warn without a logger
 	rw.Logger = nil
-	rw.Warn(ctx, "test message without logger", "test action without logger")
+	rw.Warn(ctx, "test message without logger", lazywritercache.ActionWriteDirty)
 	// No assertion needed, just make sure it doesn't panic
 }
 
@@ -454,12 +454,12 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 	}
 
 	// Create a ReaderWriteLF
-	gormRW := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
+	gormRW := NewReaderWriterLF[string, testDBItemLF](gDB, newTestDBItemLF)
 
 	// Create a LazyWriterCacheLF
-	cfg := lazywritercache.NewDefaultConfigLF[testDBItemLF](gormRW)
+	cfg := lazywritercache.NewDefaultConfigLF[string, testDBItemLF](gormRW)
 	cfg.WriteFreq = 100 * time.Millisecond
-	cache := lazywritercache.NewLazyWriterCacheLF[testDBItemLF](cfg)
+	cache := lazywritercache.NewLazyWriterCacheLF[string, testDBItemLF](cfg)
 	defer cache.Shutdown()
 
 	// Test loading a non-existent item
