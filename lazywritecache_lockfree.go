@@ -36,7 +36,10 @@ import (
 	"github.com/pilotso11/lazywritercache/lockfreequeue"
 )
 
+// CacheableLF items must implement a KeY method that returns a string. The actual key need not be a string internally
+// but the use of xsync.MapOf requies a hashable string as the key.
 type CacheableLF interface {
+	// Key must return a unique hashable key for the item in order to avoid cache collisions.
 	Key() string
 	// CopyKeyDataFrom is CRITICAL for data consistency during lazy writes.
 	// It should merge ONLY database-managed fields (e.g., auto-increment IDs,
