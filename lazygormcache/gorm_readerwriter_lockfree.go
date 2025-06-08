@@ -119,24 +119,24 @@ func (g ReaderWriteLF[K, T]) RollbackTx(ctx context.Context, tx any) (err error)
 	return err
 }
 
-func (g ReaderWriteLF[K, T]) Info(ctx context.Context, msg string, action string, item ...T) {
+func (g ReaderWriteLF[K, T]) Info(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Info(ctx, msg, action, item[0])
+			g.Logger.Info(ctx, msg, action.String(), item[0])
 		} else {
-			g.Logger.Info(ctx, msg, action)
+			g.Logger.Info(ctx, msg, action.String())
 		}
 	} else {
 		log.Println("[info] ", msg)
 	}
 }
 
-func (g ReaderWriteLF[K, T]) Warn(ctx context.Context, msg string, action string, item ...T) {
+func (g ReaderWriteLF[K, T]) Warn(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Warn(ctx, msg, action, item[0])
+			g.Logger.Warn(ctx, msg, action.String(), item[0])
 		} else {
-			g.Logger.Warn(ctx, msg, action)
+			g.Logger.Warn(ctx, msg, action.String())
 		}
 	} else {
 		log.Println("[warn] ", msg)

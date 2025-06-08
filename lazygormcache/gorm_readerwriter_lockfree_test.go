@@ -378,20 +378,20 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	rw.Logger = logger
 
 	// Test Info without an item
-	rw.Info(ctx, "test message", "test action")
+	rw.Info(ctx, "test message", lazywritercache.ActionEvict)
 	assert.True(t, logger.InfoCalled, "Info should call the logger's Info method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action", logger.LastAction, "Action should match")
+	assert.Equal(t, "evict", logger.LastAction, "Action should match")
 
 	// Test Info with an item
 	item := newTestDBItemLF("item1")
-	rw.Info(ctx, "test message with item", "test action with item", item)
+	rw.Info(ctx, "test message with item", lazywritercache.ActionEvict, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
+	assert.Equal(t, "evict", logger.LastAction, "Action should match")
 
 	// Test Info without a logger
 	rw.Logger = nil
-	rw.Info(ctx, "test message without logger", "test action without logger")
+	rw.Info(ctx, "test message without logger", lazywritercache.ActionEvict)
 	// No assertion needed, just make sure it doesn't panic
 }
 
@@ -418,20 +418,20 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	rw.Logger = logger
 
 	// Test Warn without an item
-	rw.Warn(ctx, "test message", "test action")
+	rw.Warn(ctx, "test message", lazywritercache.ActionWriteDirty)
 	assert.True(t, logger.WarnCalled, "Warn should call the logger's Warn method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action", logger.LastAction, "Action should match")
+	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
 
 	// Test Warn with an item
 	item := newTestDBItemLF("item1")
-	rw.Warn(ctx, "test message with item", "test action with item", item)
+	rw.Warn(ctx, "test message with item", lazywritercache.ActionWriteDirty, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
+	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
 
 	// Test Warn without a logger
 	rw.Logger = nil
-	rw.Warn(ctx, "test message without logger", "test action without logger")
+	rw.Warn(ctx, "test message without logger", lazywritercache.ActionWriteDirty)
 	// No assertion needed, just make sure it doesn't panic
 }
 

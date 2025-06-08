@@ -121,12 +121,12 @@ func (g NoOpReaderWriterLF[K, T]) RollbackTx(_ context.Context, _ any) error {
 	return nil
 }
 
-func (g NoOpReaderWriterLF[K, T]) Info(_ context.Context, msg string, _ string, _ ...T) {
+func (g NoOpReaderWriterLF[K, T]) Info(_ context.Context, msg string, _ CacheAction, _ ...T) {
 	g.infoCount.Add(1)
 	log.Print("[info] ", msg)
 }
 
-func (g NoOpReaderWriterLF[K, T]) Warn(_ context.Context, msg string, _ string, _ ...T) {
+func (g NoOpReaderWriterLF[K, T]) Warn(_ context.Context, msg string, _ CacheAction, _ ...T) {
 	g.warnCount.Add(1)
 	log.Print("[warn] ", msg)
 }
