@@ -31,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/puzpuzpuz/xsync"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/goleak"
 )
@@ -99,24 +98,18 @@ func TestCacheDirtyListLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "dirty records")
-	assert.True(t, findIn(cache.dirty, item))
-	assert.True(t, findIn(cache.dirty, itemLF))
+	// assert.True(t, findIn(cache.dirty, item)) // Before
+	// assert.True(t, findIn(cache.dirty, itemLF)) // Before
+	_, ok := cache.dirty.Load(item.Key())
+	assert.True(t, ok, "item should be in dirty list")
+	_, ok = cache.dirty.Load(itemLF.Key())
+	assert.True(t, ok, "itemLF should be in dirty list")
 
-	cache.Save(itemLF)
-	assert.Equal(t, 2, cache.dirty.Size(), "dirty records")
-	assert.True(t, findIn(cache.dirty, itemLF))
-}
-
-func findIn(dirty *xsync.MapOf[string, bool], item testItemLF) (found bool) {
-	found = false
-	dirty.Range(func(k string, _ bool) bool {
-		if k == item.Key() {
-			found = true
-			return false // exit the loop
-		}
-		return true
-	})
-	return found
+	cache.Save(itemLF) // Save again
+	assert.Equal(t, 2, cache.dirty.Size(), "dirty records count should not change on re-save")
+	// assert.True(t, findIn(cache.dirty, itemLF)) // Before
+	_, ok = cache.dirty.Load(itemLF.Key())
+	assert.True(t, ok, "itemLF should still be in dirty list after re-save")
 }
 
 func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
@@ -183,17 +176,17 @@ func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
 		cache.Save(item)
 	}
 
-	wait := sync.WaitGroup{}
+	var wait sync.WaitGroup
 	for i := 0; i < nThreads; i++ {
 		wait.Add(1)
 		go func() {
+			defer wait.Done()
 			for i := 0; i < b.N; i++ {
 				key := rand.Intn(cacheSize)
 				_, ok := cache.Load(keys[key])
 				if ok {
 				}
 			}
-			wait.Add(-1)
 		}()
 	}
 	wait.Wait()
@@ -272,7 +265,7 @@ func TestCacheEvictionLF(t *testing.T) {
 
 }
 
-func TestGormLazyCache_GetAndReleaseLF(t *testing.T) {
+func Test_GetAndReleaseLF(t *testing.T) {
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
@@ -287,7 +280,7 @@ func TestGormLazyCache_GetAndReleaseLF(t *testing.T) {
 
 }
 
-func TestGormLazyCache_GetAndReleaseWithForcedPanicLF(t *testing.T) {
+func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -639,4 +632,124 @@ func TestPanicHandlerLF(t *testing.T) {
 	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
 	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
 	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
+}
+
+func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
+	cfg := newNoOpTestConfigLF()
+	cfg.AllowConcurrentWrites = true // Explicitly enable
+	cfg.WriteFreq = 0                // Disable periodic writer for manual flush
+
+	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	cache.Save(newtestItemLF("item1"))
+	cache.Save(newtestItemLF("item2"))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		cache.Flush() // Call Flush concurrently
+	}()
+	go func() {
+		defer wg.Done()
+		cache.Flush() // Call Flush concurrently
+	}()
+
+	wg.Wait()
+
+	// With AllowConcurrentWrites = true, both flushes might attempt to write.
+	// The NoOpReaderWriterLF doesn't have internal state to show distinct writes easily,
+	// but we can check that items were processed (became non-dirty).
+	// A more sophisticated mock could track concurrent access.
+	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty")
+	// We expect DirtyWrites to be 2, but due to the nature of NoOp and potential race in clearing dirty,
+	// it might be 2 or more if the test runs fast enough for multiple calls to saveDirtyToDB to interleave
+	// before dirty list is fully cleared by one.
+	// For this test, primarily ensure no deadlock and items are cleared.
+	assert.GreaterOrEqual(t, mockHandler.infoCount.Load(), int64(1), "At least one flush attempt should log info")
+}
+
+func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
+	cfg := newNoOpTestConfigLF()
+	cfg.AllowConcurrentWrites = false // Explicitly disable (default, but good to test)
+	cfg.WriteFreq = 0                 // Disable periodic writer
+
+	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	cache.Save(newtestItemLF("item1"))
+
+	// Simulate one write already in progress by setting the atomic bool
+	cache.writing.Store(true)
+
+	// Attempt another flush, it should return early
+	cache.Flush()
+
+	assert.Equal(t, 1, cache.dirty.Size(), "Item should remain dirty as concurrent write was skipped")
+	assert.Equal(t, int64(0), mockHandler.infoCount.Load(), "No info should be logged by the skipped flush")
+
+	// Reset the writing flag and flush again
+	cache.writing.Store(false)
+	cache.Flush()
+	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty after successful flush")
+	assert.Equal(t, int64(2), mockHandler.infoCount.Load(), "Info logged by successful flush")
+}
+
+func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
+	cfg := newNoOpTestConfigLF()
+	cfg.WriteFreq = 0 // Disable periodic writer for manual flush
+	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	cache.Save(newtestItemLF("item1"))
+	assert.Equal(t, 1, cache.dirty.Size(), "Item should be dirty")
+
+	// Simulate an unrecoverable error on BeginTx
+	// The NoOpReaderWriterLF's IsRecoverable doesn't treat "begin unrecoverable" as unrecoverable by default.
+	// For this test, we'll rely on the logging difference.
+	// A more robust mock could be made for IsRecoverable.
+	mockHandler.errorOnNext.Store("begin unrecoverable_db_error") // This error string won't match IsRecoverable's defaults
+
+	cache.Flush()
+
+	// Check logs: Warn for unrecoverable, Info for recoverable
+	assert.Equal(t, int64(1), mockHandler.warnCount.Load(), "Warn should be logged for unrecoverable BeginTx error")
+	assert.Equal(t, int64(1), mockHandler.infoCount.Load(), "Info for 'Found N dirty records' still logs")
+	assert.Equal(t, 1, cache.dirty.Size(), "Item should remain dirty as BeginTx failed unrecoverably (from cache's perspective of not retrying immediately)")
+}
+
+func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
+	cfg := newNoOpTestConfigLF()
+	cfg.WriteFreq = 0
+	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF[testItemLF](cfg)
+	defer cache.Shutdown()
+
+	cache.Save(newtestItemLF("itemToFailSave"))
+	cache.Save(newtestItemLF("itemToSucceedSaveButFailRollback"))
+
+	// Setup:
+	// 1. First item's Save() will cause a recoverable error (e.g., "save deadlock").
+	// 2. This triggers a RollbackTx().
+	// 3. RollbackTx() will then error unrecoverably (e.g., "rollback unrecoverable_db_error").
+	mockHandler.errorOnNext.Store("save deadlock,rollback unrecoverable_db_error")
+
+	cache.Flush()
+
+	// Logs:
+	// - Info for "Recoverable error saving itemToFailSave..."
+	// - Warn for "Error rolling back transaction after failures, batch aborted: unrecoverable_db_error"
+	assert.Equal(t, int64(1), mockHandler.warnCount.Load(), "One Warn for unrecoverable rollback")
+	// Info logs: "Found N dirty", "Recoverable error saving..."
+	assert.Equal(t, int64(2), mockHandler.infoCount.Load(), "Two Info logs expected")
+
+	// State:
+	// Because rollback failed unrecoverably, the `fail += len(unCommitted)` line runs,
+	// and items are NOT re-added to dirty list.
+	assert.Equal(t, 1, cache.dirty.Size(), "Items should NOT be re-added to dirty list after unrecoverable rollback")
 }
