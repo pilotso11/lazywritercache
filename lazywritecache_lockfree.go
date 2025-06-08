@@ -376,7 +376,7 @@ func (c *LazyWriterCacheLF[T]) evictionManager(ctx context.Context) {
 // or DB writes are failing, but it prevents data loss.
 func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 	for c.cache.Size() > c.Limit {
-		keyToEvict, fifoOk := c.fifo.Dequeue()
+		keyToEvict, fifoOk := c.fifo.Peek()
 		if !fifoOk {
 			// FIFO queue is empty, but cache size > limit.
 			// This might happen if all remaining items are dirty and constantly re-queued,
@@ -390,17 +390,26 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 			// Item is dirty, cannot evict. Put it back at the end of the queue.
 			// Log if the item is actually still in the cache.
 			if item, itemInCache := c.cache.Load(keyToEvict); itemInCache {
-				c.handler.Warn(ctx, "Dirty item at head of purge queue; re-queueing, eviction paused for this cycle.", "evict", item)
+				c.handler.Warn(ctx, "Dirty item at head of purge queue; eviction paused for this cycle.", "evict", item)
 			} else {
 				// It's unusual for a key to be in 'dirty' but not in 'cache'.
 				// It might have been deleted from cache but not yet from dirty list by another process.
 				// In this case, just remove it from dirty list as it's not in cache.
 				c.handler.Warn(ctx, fmt.Sprintf("Dirty key %s (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), "evict")
-				c.dirty.Delete(keyToEvict) // Remove from dirty as it's not in cache.
-				continue                   // Try next item from FIFO.
+				c.dirty.Delete(keyToEvict)          // Remove from dirty as it's not in cache.
+				evictedKey, ok := c.fifo.Dequeue()  // remove the head of the fifo
+				if ok && evictedKey != keyToEvict { // double check it was the key we tried
+					// it looks like 2 eviction processes are running in parallel, this is not supposed to happen, but the head been removed since we peeked at it so put this one back.
+					c.fifo.Enqueue(evictedKey)
+				}
+				continue // Try next item from FIFO.
 			}
-			c.fifo.Enqueue(keyToEvict) // Re-enqueue the dirty key
-			return                     // Stop this eviction cycle; wait for next PurgeFreq or for item to become non-dirty.
+			return // Stop this eviction cycle; wait for next PurgeFreq or for item to become non-dirty.
+		}
+		evictedKey, ok := c.fifo.Dequeue()  // remove the head of the fifo
+		if ok && evictedKey != keyToEvict { // double check it was the key we tried
+			// it looks like 2 eviction processes are running in parallel, this is not supposed to happen, but the head been removed since we peeked at it so put this one back..
+			c.fifo.Enqueue(evictedKey)
 		}
 
 		// Item is not dirty (or not in dirty map), proceed with eviction.

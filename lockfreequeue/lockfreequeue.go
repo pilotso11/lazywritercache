@@ -25,6 +25,8 @@
 package lockfreequeue
 
 import (
+	"fmt"
+	"strings"
 	"sync/atomic"
 )
 
@@ -88,4 +90,50 @@ func (q *LockFreeQueue[T]) Dequeue() (val T, ok bool) {
 			}
 		}
 	}
+}
+
+// Peek returns the value at the head of the queue without removing it.
+// It returns the value and a boolean indicating whether the queue is empty.
+func (q *LockFreeQueue[T]) Peek() (val T, ok bool) {
+	for {
+		head := q.head.Load()
+		tail := q.tail.Load()
+		next := head.next.Load()
+		if head == q.head.Load() { // are head, tail, and next consistent?
+			if head == tail { // is queue empty or tail falling behind?
+				if next == nil { // is queue empty?
+					return val, false
+				}
+				// tail is falling behind. try to advance it
+				q.tail.CompareAndSwap(tail, next)
+			} else {
+				// read value and return it without modifying the queue
+				return next.value, true
+			}
+		}
+	}
+}
+
+// String returns a string representation of the queue's contents without modifying the queue.
+// The items are displayed in order from head to tail.
+func (q *LockFreeQueue[T]) String() string {
+	var sb strings.Builder
+	sb.WriteString("[")
+
+	// Start from the first real node (after the dummy head node)
+	current := q.head.Load().next.Load()
+	isFirst := true
+
+	// Traverse the queue
+	for current != nil {
+		if !isFirst {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%v", current.value))
+		isFirst = false
+		current = current.next.Load()
+	}
+
+	sb.WriteString("]")
+	return sb.String()
 }
