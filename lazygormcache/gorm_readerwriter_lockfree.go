@@ -37,9 +37,9 @@ import (
 // LoggerLF is an interface that can be implemented to provide logging for the cache.
 // The default logger is log.Println.
 type LoggerLF[K comparable] interface {
-	Info(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF[K])
-	Warn(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF[K])
-	Error(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF[K])
+	Info(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...lazywritercache.CacheableLF[K])
+	Warn(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...lazywritercache.CacheableLF[K])
+	Error(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...lazywritercache.CacheableLF[K])
 }
 
 // ReaderWriteLF is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
@@ -48,7 +48,7 @@ type LoggerLF[K comparable] interface {
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
 type ReaderWriteLF[K comparable, T lazywritercache.CacheableLF[K]] struct {
 	db                *gorm.DB
-	getTemplateItem   func(key string) T
+	getTemplateItem   func(key K) T
 	UseTransactions   bool
 	Logger            LoggerLF[K]
 	RecoverableErrors *xsync.MapOf[string, error]
@@ -58,7 +58,7 @@ type ReaderWriteLF[K comparable, T lazywritercache.CacheableLF[K]] struct {
 var _ lazywritercache.CacheReaderWriterLF[string, lazywritercache.EmptyCacheableLF] = (*ReaderWriteLF[string, lazywritercache.EmptyCacheableLF])(nil)
 
 // NewReaderWriterLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
-func NewReaderWriterLF[K comparable, T lazywritercache.CacheableLF[K]](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[K, T] {
+func NewReaderWriterLF[K comparable, T lazywritercache.CacheableLF[K]](db *gorm.DB, itemTemplate func(key K) T) ReaderWriteLF[K, T] {
 	return ReaderWriteLF[K, T]{
 		db:                db,
 		getTemplateItem:   itemTemplate,
@@ -67,7 +67,7 @@ func NewReaderWriterLF[K comparable, T lazywritercache.CacheableLF[K]](db *gorm.
 	}
 }
 
-func (g ReaderWriteLF[K, T]) Find(ctx context.Context, key string, tx any) (T, error) {
+func (g ReaderWriteLF[K, T]) Find(ctx context.Context, key K, tx any) (T, error) {
 	var dbTx *gorm.DB
 	if tx == nil {
 		dbTx = g.db
@@ -122,9 +122,9 @@ func (g ReaderWriteLF[K, T]) RollbackTx(ctx context.Context, tx any) (err error)
 func (g ReaderWriteLF[K, T]) Info(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Info(ctx, msg, action.String(), item[0])
+			g.Logger.Info(ctx, msg, action, item[0])
 		} else {
-			g.Logger.Info(ctx, msg, action.String())
+			g.Logger.Info(ctx, msg, action)
 		}
 	} else {
 		log.Println("[info] ", msg)
@@ -134,9 +134,9 @@ func (g ReaderWriteLF[K, T]) Info(ctx context.Context, msg string, action lazywr
 func (g ReaderWriteLF[K, T]) Warn(ctx context.Context, msg string, action lazywritercache.CacheAction, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Warn(ctx, msg, action.String(), item[0])
+			g.Logger.Warn(ctx, msg, action, item[0])
 		} else {
-			g.Logger.Warn(ctx, msg, action.String())
+			g.Logger.Warn(ctx, msg, action)
 		}
 	} else {
 		log.Println("[warn] ", msg)

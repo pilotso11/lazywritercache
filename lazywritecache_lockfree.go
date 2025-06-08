@@ -24,6 +24,7 @@ package lazywritercache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"os"
@@ -358,7 +359,7 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 			fail += len(unCommitted)
 			// unCommitted contains all successfully saved items in this batch.
 			// notify the Handler they are lost.
-			c.Handler.Fail(ctx, err, unCommitted...)
+			c.Handler.Fail(ctx, errors.Join(err, errRollback), unCommitted...)
 			return
 		}
 		// Re-mark all items that were part of this transaction attempt as dirty if the transaction failed.

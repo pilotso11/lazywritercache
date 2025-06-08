@@ -47,22 +47,22 @@ type MockLoggerLF struct {
 	WarnCalled  bool
 	ErrorCalled bool
 	LastMsg     string
-	LastAction  string
+	LastAction  lazywritercache.CacheAction
 }
 
-func (m *MockLoggerLF) Info(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
+func (m *MockLoggerLF) Info(_ context.Context, msg string, action lazywritercache.CacheAction, _ ...lazywritercache.CacheableLF[string]) {
 	m.InfoCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Warn(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
+func (m *MockLoggerLF) Warn(_ context.Context, msg string, action lazywritercache.CacheAction, _ ...lazywritercache.CacheableLF[string]) {
 	m.WarnCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Error(_ context.Context, msg string, action string, _ ...lazywritercache.CacheableLF[string]) {
+func (m *MockLoggerLF) Error(_ context.Context, msg string, action lazywritercache.CacheAction, _ ...lazywritercache.CacheableLF[string]) {
 	m.ErrorCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
@@ -381,13 +381,13 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	rw.Info(ctx, "test message", lazywritercache.ActionEvict)
 	assert.True(t, logger.InfoCalled, "Info should call the logger's Info method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "evict", logger.LastAction, "Action should match")
+	assert.Equal(t, "evict", logger.LastAction.String(), "Action should match")
 
 	// Test Info with an item
 	item := newTestDBItemLF("item1")
 	rw.Info(ctx, "test message with item", lazywritercache.ActionEvict, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "evict", logger.LastAction, "Action should match")
+	assert.Equal(t, lazywritercache.ActionEvict, logger.LastAction, "Action should match")
 
 	// Test Info without a logger
 	rw.Logger = nil
@@ -421,13 +421,13 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	rw.Warn(ctx, "test message", lazywritercache.ActionWriteDirty)
 	assert.True(t, logger.WarnCalled, "Warn should call the logger's Warn method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
-	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
+	assert.Equal(t, "write-dirty", logger.LastAction.String(), "Action should match")
 
 	// Test Warn with an item
 	item := newTestDBItemLF("item1")
 	rw.Warn(ctx, "test message with item", lazywritercache.ActionWriteDirty, item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
-	assert.Equal(t, "write-dirty", logger.LastAction, "Action should match")
+	assert.Equal(t, lazywritercache.ActionWriteDirty, logger.LastAction, "Action should match")
 
 	// Test Warn without a logger
 	rw.Logger = nil
