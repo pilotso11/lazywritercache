@@ -25,7 +25,10 @@ package lazygormcache
 import (
 	"errors"
 	"log"
+	"strings"
+	"sync/atomic"
 
+	"github.com/puzpuzpuz/xsync"
 	"gorm.io/gorm"
 
 	"github.com/pilotso11/lazywritercache"
@@ -44,10 +47,13 @@ type LoggerLF interface {
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
 type ReaderWriteLF[T lazywritercache.CacheableLF] struct {
-	db              *gorm.DB
-	getTemplateItem func(key string) T
-	UseTransactions bool
-	Logger          LoggerLF
+	db                    *gorm.DB
+	getTemplateItem       func(key string) T
+	UseTransactions       bool
+	Logger                LoggerLF
+	RecoverableErrors     *xsync.MapOf[string, error]
+	AllowConcurrentWrites *atomic.Bool
+	currentWrites         *atomic.Int32
 }
 
 // Check interface is complete
@@ -56,9 +62,10 @@ var _ lazywritercache.CacheReaderWriterLF[lazywritercache.EmptyCacheableLF] = (*
 // NewReaderWriterLF creates a GORM Cache Reader Writer supply a new item creator and a wrapper to db.Save() that first unwraps item CacheableLF to your type
 func NewReaderWriterLF[T lazywritercache.CacheableLF](db *gorm.DB, itemTemplate func(key string) T) ReaderWriteLF[T] {
 	return ReaderWriteLF[T]{
-		db:              db,
-		getTemplateItem: itemTemplate,
-		UseTransactions: true,
+		db:                db,
+		getTemplateItem:   itemTemplate,
+		UseTransactions:   true,
+		RecoverableErrors: xsync.NewMapOf[error](),
 	}
 }
 
@@ -136,5 +143,26 @@ func (g ReaderWriteLF[T]) Warn(msg string, action string, item ...T) {
 		}
 	} else {
 		log.Println("[warn] ", msg)
+	}
+}
+
+func (g ReaderWriteLF[T]) IsRecoverable(err error) bool {
+	switch {
+	case errors.Is(err, gorm.ErrInvalidData):
+		return false
+	case errors.Is(err, gorm.ErrDuplicatedKey):
+		return false
+	case errors.Is(err, gorm.ErrCheckConstraintViolated):
+		return false
+	case errors.Is(err, gorm.ErrForeignKeyViolated):
+		return false
+	case errors.Is(err, gorm.ErrInvalidTransaction):
+		return false
+	case errors.Is(err, gorm.ErrPrimaryKeyRequired):
+		return false
+	case strings.Contains(strings.ToLower(err.Error()), "deadlock"):
+		return true
+	default:
+		return false
 	}
 }

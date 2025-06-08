@@ -67,13 +67,17 @@ func (m *MockLoggerLF) Error(msg string, action string, item ...lazywritercache.
 	m.LastAction = action
 }
 
+func closeIgnore(db *sql.DB) {
+	_ = db.Close()
+}
+
 func TestNewGormCacheReaderWriteLF(t *testing.T) {
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -99,7 +103,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -162,7 +166,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -210,7 +214,7 @@ func TestReaderWriteLF_BeginTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -246,7 +250,7 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -263,12 +267,14 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	mock.ExpectCommit()
 
 	tx := gDB.Begin()
-	rw.CommitTx(tx)
+	err = rw.CommitTx(tx)
+	assert.NoError(t, err, "CommitTx should not return an error")
 
 	// Test CommitTx with UseTransactions = false
 	rw.UseTransactions = false
 
-	rw.CommitTx(gDB)
+	err = rw.CommitTx(tx)
+	assert.NoError(t, err, "CommitTx should not return an error")
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
@@ -280,7 +286,7 @@ func TestReaderWriteLF_RollbackTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -328,7 +334,7 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -367,7 +373,7 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,
@@ -406,7 +412,7 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating mock database: %v", err)
 	}
-	defer db.Close()
+	defer closeIgnore(db)
 
 	gDB, err := gorm.Open(postgres.New(postgres.Config{
 		Conn:       db,

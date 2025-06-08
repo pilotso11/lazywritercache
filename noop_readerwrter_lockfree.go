@@ -35,6 +35,7 @@ type NoOpReaderWriterLF[T CacheableLF] struct {
 	panicOnNext     *atomic.Bool
 	errorOnNext     *atomic.Value
 	warnCount       *atomic.Int64
+	infoCount       *atomic.Int64
 }
 
 // Check interface is complete
@@ -46,6 +47,7 @@ func NewNoOpReaderWriterLF[T CacheableLF](itemTemplate func(key string) T) NoOpR
 		panicOnNext:     &atomic.Bool{},
 		errorOnNext:     &atomic.Value{},
 		warnCount:       &atomic.Int64{},
+		infoCount:       &atomic.Int64{},
 	}
 }
 
@@ -112,6 +114,7 @@ func (g NoOpReaderWriterLF[T]) RollbackTx(_ any) error {
 }
 
 func (g NoOpReaderWriterLF[T]) Info(msg string, _ string, _ ...T) {
+	g.infoCount.Add(1)
 	log.Print("[info] ", msg)
 }
 
@@ -134,4 +137,14 @@ func (g NoOpReaderWriterLF[T]) removeFromErrorOnNext() {
 	} else {
 		g.errorOnNext.Store("")
 	}
+}
+
+func (g NoOpReaderWriterLF[T]) IsRecoverable(err error) bool {
+	if strings.Contains(strings.ToLower(err.Error()), "deadlock") {
+		return true
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "bad connection") { // mock for driver.ErrBadConn
+		return true
+	}
+	return false
 }

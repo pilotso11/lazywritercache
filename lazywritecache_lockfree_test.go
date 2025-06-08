@@ -517,7 +517,8 @@ func TestRequeueRecoverableErrLF(t *testing.T) {
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save deadlock")
 	cache.Flush()
-	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, int64(3), testHandler.infoCount.Load(), "Info received")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 }
 
@@ -533,7 +534,8 @@ func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save duplicate key")
 	cache.Flush()
-	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info received")
 	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
 }
 
@@ -579,9 +581,10 @@ func TestRequeueBeginRecoverableErrLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
-	testHandler.errorOnNext.Store("begin db no connections")
+	testHandler.errorOnNext.Store("begin db bad connection")
 	cache.Flush()
-	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warning received")
+	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info received")
+	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 }
 
@@ -595,11 +598,30 @@ func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
-	testHandler.errorOnNext.Store("save deadlock,rollback error")
+	testHandler.errorOnNext.Store("save deadlock,rollback deadlock")
 	cache.Flush()
 	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
-	assert.Equal(t, int64(3), testHandler.warnCount.Load(), "Warnings received")
+	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warnings received")
+	assert.Equal(t, int64(4), testHandler.infoCount.Load(), "Info received")
+}
+
+func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
+	item := testItemLF{id: "test1"}
+	itemLF := testItemLF{id: "testLF"}
+	cfg := newNoOpTestConfigLF()
+	testHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
+	cache := NewLazyWriterCacheLF(cfg)
+	defer cache.Shutdown()
+	cache.Save(item)
+	cache.Save(itemLF)
+	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
+	testHandler.errorOnNext.Store("save deadlock,rollback failed")
+	cache.Flush()
+	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
+	assert.Equal(t, 1, cache.dirty.Size(), "1 item should be in the cache")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
+	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info received")
 }
 
 func TestPanicHandlerLF(t *testing.T) {
