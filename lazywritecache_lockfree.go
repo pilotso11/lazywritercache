@@ -354,7 +354,7 @@ func (c *LazyWriterCacheLF[K, T]) saveDirtyToDB(ctx context.Context) {
 		if errRollback != nil && c.Handler.IsRecoverable(ctx, errRollback) {
 			c.Handler.Info(ctx, fmt.Sprintf("Error rolling back transaction after failures, will retry: %v", errRollback), ActionWriteDirty)
 		} else if errRollback != nil {
-			c.Handler.Warn(ctx, fmt.Sprintf("Error rolling back transaction after failures, batach aborted: %v", errRollback), ActionWriteDirty)
+			c.Handler.Warn(ctx, fmt.Sprintf("Error rolling back transaction after failures, batch aborted: %v", errRollback), ActionWriteDirty)
 			fail += len(unCommitted)
 			// unCommitted contains all successfully saved items in this batch.
 			// notify the Handler they are lost.
