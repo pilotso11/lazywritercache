@@ -86,6 +86,7 @@ type CacheReaderWriterLF[T CacheableLF] interface {
 	//   - Persistent connection failures or authentication issues.
 	//   - "Record not found" errors if the operation expected the record to exist.
 	IsRecoverable(_ context.Context, err error) bool
+	Fail(ctx context.Context, err error, items ...T)
 }
 
 type ConfigLF[T CacheableLF] struct {
@@ -233,6 +234,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 		return
 	} else if err != nil {
 		c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from BeginTx: %q, batch will be aborted", err), "write-dirty")
+		c.handler.Fail(ctx, err)
 		return
 	}
 	// Ensure the commit runs
@@ -267,6 +269,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 				return false // Stop processing this batch, it will be retried.
 			}
 			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error saving %s to DB: %v", item.Key(), err), "write-dirty", item)
+			c.handler.Fail(ctx, err, item)
 			fail++
 			// For unrecoverable errors, we don't re-add to unCommitted for this transaction's retry.
 			// The item remains out of the dirty list. Consider if this is the desired behavior or if it should be re-added to dirty for a *future* attempt.
@@ -293,7 +296,7 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 			} else {
 				// Item was purged from cache between DB save and this update.
 				// It was saved to DB, but won't be re-added to cache here.
-				c.handler.Warn(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), "write-dirty", item)
+				c.handler.Info(ctx, fmt.Sprintf("DB-saved item %v was purged from cache before post-save update.", item.Key()), "write-dirty", item)
 			}
 		}()
 		success++
@@ -307,6 +310,9 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 		} else if errRollback != nil {
 			c.handler.Warn(ctx, fmt.Sprintf("Error rolling back transaction after failures, batach aborted: %v", errRollback), "write-dirty")
 			fail += len(unCommitted)
+			// unCommitted contains all successfully saved items in this batch.
+			// notify the handler they are lost.
+			c.handler.Fail(ctx, err, unCommitted...)
 			return
 		}
 		// Re-mark all items that were part of this transaction attempt as dirty if the transaction failed.
@@ -336,6 +342,8 @@ func (c *LazyWriterCacheLF[T]) saveDirtyToDB(ctx context.Context) {
 			// These items are NOT re-added to dirty list, effectively lost from cache's perspective of being dirty.
 			c.handler.Warn(ctx, fmt.Sprintf("Unrecoverable error from CommitTx, batch data might be inconsistent in DB and will NOT be retried by cache: %v", err), "write-dirty")
 			// unCommitted items are not re-added to dirty list.
+			// notify handler of data loss.
+			c.handler.Fail(ctx, err, unCommitted...)
 		}
 		c.handler.Warn(ctx, fmt.Sprintf("Error committing transaction: %v failures, %v successes", fail, success), "write-dirty")
 		return
@@ -376,7 +384,7 @@ func (c *LazyWriterCacheLF[T]) evictionManager(ctx context.Context) {
 // or DB writes are failing, but it prevents data loss.
 func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 	for c.cache.Size() > c.Limit {
-		keyToEvict, fifoOk := c.fifo.Dequeue()
+		keyToEvict, fifoOk := c.fifo.Peek()
 		if !fifoOk {
 			// FIFO queue is empty, but cache size > limit.
 			// This might happen if all remaining items are dirty and constantly re-queued,
@@ -390,21 +398,25 @@ func (c *LazyWriterCacheLF[T]) evictionProcessor(ctx context.Context) {
 			// Item is dirty, cannot evict. Put it back at the end of the queue.
 			// Log if the item is actually still in the cache.
 			if item, itemInCache := c.cache.Load(keyToEvict); itemInCache {
-				c.handler.Warn(ctx, "Dirty item at head of purge queue; re-queueing, eviction paused for this cycle.", "evict", item)
+				c.handler.Warn(ctx, "Dirty item at head of purge queue; eviction paused for this cycle.", "evict", item)
 			} else {
 				// It's unusual for a key to be in 'dirty' but not in 'cache'.
 				// It might have been deleted from cache but not yet from dirty list by another process.
 				// In this case, just remove it from dirty list as it's not in cache.
 				c.handler.Warn(ctx, fmt.Sprintf("Dirty key %s (not in cache) at head of purge queue; removing from dirty list.", keyToEvict), "evict")
 				c.dirty.Delete(keyToEvict) // Remove from dirty as it's not in cache.
-				continue                   // Try next item from FIFO.
+				_, _ = c.fifo.Dequeue()    // remove the head of the fifo
+				// there is no need to check the dequeued item is also the item we peeked at because
+				// evictionProcessor() is only called sequentially from the goroutine loop.
+				continue // Try next item from FIFO.
 			}
-			c.fifo.Enqueue(keyToEvict) // Re-enqueue the dirty key
-			return                     // Stop this eviction cycle; wait for next PurgeFreq or for item to become non-dirty.
+			return // Stop this eviction cycle; wait for next PurgeFreq or for item to become non-dirty.
 		}
 
-		// Item is not dirty (or not in dirty map), proceed with eviction.
-		// Deleting from cache first.
+		// Item is not dirty (or not in dirty map), proceed with eviction and remove from the fifi..
+		_, _ = c.fifo.Dequeue()
+		// there is no need to check the dequeued head of the fifo item is also the item we peeked at because
+		// evictionProcessor() is only called sequentially from the goroutine loop.
 		c.cache.Delete(keyToEvict)
 		// The key might still be in the dirty map if `dirtyLoaded` was false (meaning it was never marked dirty or cleared).
 		// If it was truly non-dirty, it shouldn't be in the dirty map.

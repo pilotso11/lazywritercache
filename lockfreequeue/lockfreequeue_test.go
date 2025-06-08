@@ -119,6 +119,151 @@ func TestConcurrentOperations(t *testing.T) {
 	assert.Equal(t, numGoroutines*numOperations, count, "Should dequeue exactly the number of enqueued items")
 }
 
+func TestPeek(t *testing.T) {
+	// Test with empty queue
+	q1 := NewLockFreeQueue[int]()
+	var zeroVal int
+	val, ok := q1.Peek()
+	assert.False(t, ok, "Peek from empty queue should return false")
+	assert.Equal(t, zeroVal, val, "Peek from empty queue should return zero value")
+
+	// Test with integers
+	q2 := NewLockFreeQueue[int]()
+	q2.Enqueue(1)
+	q2.Enqueue(2)
+	q2.Enqueue(3)
+
+	// Peek should return the first item without removing it
+	val, ok = q2.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, 1, val, "Peek should return the first item")
+
+	// Peek again should return the same item
+	val, ok = q2.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, 1, val, "Peek should return the first item again")
+
+	// Dequeue should remove the first item
+	val, ok = q2.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, 1, val, "Dequeue should return the first item")
+
+	// Peek should now return the new first item
+	val, ok = q2.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, 2, val, "Peek should return the new first item")
+
+	// Test with custom struct type
+	type Person struct {
+		Name string
+		Age  int
+	}
+
+	qPerson := NewLockFreeQueue[Person]()
+	alice := Person{Name: "Alice", Age: 30}
+	bob := Person{Name: "Bob", Age: 25}
+
+	qPerson.Enqueue(alice)
+	qPerson.Enqueue(bob)
+
+	// Peek should return Alice
+	firstPerson, ok := qPerson.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, alice, firstPerson, "Peek should return Alice")
+
+	// Peek again should still return Alice
+	firstPerson, ok = qPerson.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, alice, firstPerson, "Peek should still return Alice")
+
+	// Dequeue should remove Alice
+	firstPerson, ok = qPerson.Dequeue()
+	assert.True(t, ok, "Dequeue from non-empty queue should return true")
+	assert.Equal(t, alice, firstPerson, "Dequeue should return Alice")
+
+	// Peek should now return Bob
+	secondPerson, ok := qPerson.Peek()
+	assert.True(t, ok, "Peek from non-empty queue should return true")
+	assert.Equal(t, bob, secondPerson, "Peek should now return Bob")
+}
+
+func TestPeekWithTailFallingBehind(t *testing.T) {
+	// Create a new queue
+	q := NewLockFreeQueue[string]()
+
+	// Enqueue an item
+	q.Enqueue("test-item")
+
+	// At this point, the queue structure should be:
+	// head -> dummy -> node("test-item")
+	// tail -> node("test-item")
+
+	// Manually reset tail to point to the dummy node to simulate tail falling behind
+	// This creates the scenario where head == tail but next != nil
+	head := q.head.Load()
+	q.tail.Store(head) // Now tail is pointing to the dummy node (falling behind)
+
+	// Verify that the tail is now falling behind
+	tail := q.tail.Load()
+	assert.Equal(t, head, tail, "Head and tail should be the same after manipulation")
+	assert.NotNil(t, head.next.Load(), "Next should not be nil, confirming tail is falling behind")
+
+	// Call Peek() - it should handle the tail falling behind and return the correct item
+	val, ok := q.Peek()
+	assert.True(t, ok, "Peek should return true even when tail is falling behind")
+	assert.Equal(t, "test-item", val, "Peek should return the correct item even when tail is falling behind")
+
+	// Verify that the queue structure is corrected (tail is advanced)
+	newTail := q.tail.Load()
+	assert.NotEqual(t, head, newTail, "Tail should have been advanced by Peek()")
+
+	// Verify that a subsequent Peek still returns the correct value
+	val, ok = q.Peek()
+	assert.True(t, ok, "Peek should still return true")
+	assert.Equal(t, "test-item", val, "Peek should still return the correct item")
+}
+
+func TestString(t *testing.T) {
+	// Test with empty queue
+	q1 := NewLockFreeQueue[int]()
+	assert.Equal(t, "[]", q1.String(), "Empty queue should be represented as '[]'")
+
+	// Test with integers
+	q2 := NewLockFreeQueue[int]()
+	q2.Enqueue(1)
+	q2.Enqueue(2)
+	q2.Enqueue(3)
+	assert.Equal(t, "[1, 2, 3]", q2.String(), "Queue with integers should be correctly represented")
+
+	// Test with strings
+	q3 := NewLockFreeQueue[string]()
+	q3.Enqueue("apple")
+	q3.Enqueue("banana")
+	q3.Enqueue("cherry")
+	assert.Equal(t, "[apple, banana, cherry]", q3.String(), "Queue with strings should be correctly represented")
+
+	// Test that String() doesn't modify the queue
+	item, ok := q3.Dequeue()
+	assert.True(t, ok)
+	assert.Equal(t, "apple", item, "First item should still be 'apple' after String() call")
+	assert.Equal(t, "[banana, cherry]", q3.String(), "Queue should be correctly represented after dequeue")
+
+	// Test with custom struct
+	type Person struct {
+		Name string
+		Age  int
+	}
+	q4 := NewLockFreeQueue[Person]()
+	q4.Enqueue(Person{Name: "Alice", Age: 30})
+	q4.Enqueue(Person{Name: "Bob", Age: 25})
+	// The exact string representation depends on how Go formats structs, so we just check it contains the names
+	str := q4.String()
+	assert.Contains(t, str, "Alice")
+	assert.Contains(t, str, "Bob")
+	assert.Contains(t, str, "30")
+	assert.Contains(t, str, "25")
+}
+
 func TestConcurrentEnqueueDequeue(t *testing.T) {
 	// Use a WaitGroup to ensure all goroutines complete
 	var producerWg sync.WaitGroup

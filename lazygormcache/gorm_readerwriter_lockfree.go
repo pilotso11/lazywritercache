@@ -27,7 +27,6 @@ import (
 	"errors"
 	"log"
 	"strings"
-	"sync/atomic"
 
 	"github.com/puzpuzpuz/xsync"
 	"gorm.io/gorm"
@@ -48,13 +47,11 @@ type LoggerLF interface {
 // If set to true t find and save operation is done in a single transaction which ensures no collisions with a parallel writer.
 // But also the flush is done in a transaction which is much faster.  You don't really want to set this to false except for debugging.
 type ReaderWriteLF[T lazywritercache.CacheableLF] struct {
-	db                    *gorm.DB
-	getTemplateItem       func(key string) T
-	UseTransactions       bool
-	Logger                LoggerLF
-	RecoverableErrors     *xsync.MapOf[string, error]
-	AllowConcurrentWrites *atomic.Bool
-	currentWrites         *atomic.Int32
+	db                *gorm.DB
+	getTemplateItem   func(key string) T
+	UseTransactions   bool
+	Logger            LoggerLF
+	RecoverableErrors *xsync.MapOf[string, error]
 }
 
 // Check interface is complete
@@ -165,4 +162,8 @@ func (g ReaderWriteLF[T]) IsRecoverable(_ context.Context, err error) bool {
 	default:
 		return false
 	}
+}
+
+func (g ReaderWriteLF[T]) Fail(_ context.Context, _ error, _ ...T) {
+	// nothing we can do here.
 }
