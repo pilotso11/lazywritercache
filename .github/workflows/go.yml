@@ -66,6 +66,10 @@ jobs:
         github_token: ${{ github.token }}
         branch: ${{ github.head_ref }}
 
+    - name: Run benchmarks
+      run: |
+        go test -bench . | tee output.txt
+
     - name: Store benchmark result
       uses: benchmark-action/github-action-benchmark@v1
       with:
