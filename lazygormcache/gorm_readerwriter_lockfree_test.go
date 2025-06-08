@@ -1,6 +1,7 @@
 package lazygormcache
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -49,19 +50,19 @@ type MockLoggerLF struct {
 	LastAction  string
 }
 
-func (m *MockLoggerLF) Info(msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Info(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.InfoCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Warn(msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Warn(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.WarnCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
 }
 
-func (m *MockLoggerLF) Error(msg string, action string, item ...lazywritercache.CacheableLF) {
+func (m *MockLoggerLF) Error(_ context.Context, msg string, action string, item ...lazywritercache.CacheableLF) {
 	m.ErrorCalled = true
 	m.LastMsg = msg
 	m.LastAction = action
@@ -98,6 +99,7 @@ func TestNewGormCacheReaderWriteLF(t *testing.T) {
 }
 
 func TestReaderWriteLF_Find(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -121,7 +123,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		WithArgs("item1", 1).
 		WillReturnRows(sqlmock.NewRows(testColumnsLF).AddRow(1, "item1"))
 
-	item, err := rw.Find("item1", nil)
+	item, err := rw.Find(ctx, "item1", nil)
 	assert.NoError(t, err, "Find should not return an error")
 	assert.Equal(t, "item1", item.Value, "Item value should match")
 	assert.Equal(t, uint(1), item.ID, "Item ID should match")
@@ -131,7 +133,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		WithArgs("missing", 1).
 		WillReturnRows(sqlmock.NewRows(testColumnsLF))
 
-	_, err = rw.Find("missing", nil)
+	_, err = rw.Find(ctx, "missing", nil)
 	assert.Error(t, err, "Find should return an error when no rows are found")
 	assert.Equal(t, "not found", err.Error(), "Error message should be 'not found'")
 
@@ -140,7 +142,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		WithArgs("error", 1).
 		WillReturnError(sql.ErrConnDone)
 
-	_, err = rw.Find("error", nil)
+	_, err = rw.Find(ctx, "error", nil)
 	assert.Error(t, err, "Find should return an error when the query fails")
 	assert.Equal(t, sql.ErrConnDone, err, "Error should be sql.ErrConnDone")
 
@@ -151,7 +153,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 		WithArgs("item2", 1).
 		WillReturnRows(sqlmock.NewRows(testColumnsLF).AddRow(2, "item2"))
 
-	item, err = rw.Find("item2", tx)
+	item, err = rw.Find(ctx, "item2", tx)
 	assert.NoError(t, err, "Find should not return an error")
 	assert.Equal(t, "item2", item.Value, "Item value should match")
 	assert.Equal(t, uint(2), item.ID, "Item ID should match")
@@ -161,6 +163,7 @@ func TestReaderWriteLF_Find(t *testing.T) {
 }
 
 func TestReaderWriteLF_Save(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -188,7 +191,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 	mock.ExpectCommit()
 
 	item := newTestDBItemLF("item1")
-	err = rw.Save(item, gDB)
+	err = rw.Save(ctx, item, gDB)
 	assert.NoError(t, err, "Save should not return an error")
 
 	// Test Save with a query that returns an error
@@ -200,7 +203,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 	mock.ExpectRollback()
 
 	item = newTestDBItemLF("error")
-	err = rw.Save(item, gDB)
+	err = rw.Save(ctx, item, gDB)
 	assert.Error(t, err, "Save should return an error when the query fails")
 	assert.Equal(t, sql.ErrConnDone, err, "Error should be sql.ErrConnDone")
 
@@ -209,6 +212,7 @@ func TestReaderWriteLF_Save(t *testing.T) {
 }
 
 func TestReaderWriteLF_BeginTx(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -229,14 +233,14 @@ func TestReaderWriteLF_BeginTx(t *testing.T) {
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 
-	tx, err := rw.BeginTx()
+	tx, err := rw.BeginTx(ctx)
 	assert.NoError(t, err, "BeginTx should not return an error")
 	assert.NotNil(t, tx, "Transaction should not be nil")
 
 	// Test BeginTx with UseTransactions = false
 	rw.UseTransactions = false
 
-	tx, err = rw.BeginTx()
+	tx, err = rw.BeginTx(ctx)
 	assert.NoError(t, err, "BeginTx should not return an error")
 	assert.Equal(t, gDB, tx, "Transaction should be the DB when UseTransactions is false")
 
@@ -245,6 +249,7 @@ func TestReaderWriteLF_BeginTx(t *testing.T) {
 }
 
 func TestReaderWriteLF_CommitTx(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -267,13 +272,13 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 	mock.ExpectCommit()
 
 	tx := gDB.Begin()
-	err = rw.CommitTx(tx)
+	err = rw.CommitTx(ctx, tx)
 	assert.NoError(t, err, "CommitTx should not return an error")
 
 	// Test CommitTx with UseTransactions = false
 	rw.UseTransactions = false
 
-	err = rw.CommitTx(tx)
+	err = rw.CommitTx(ctx, tx)
 	assert.NoError(t, err, "CommitTx should not return an error")
 
 	// Verify all expectations were met
@@ -281,6 +286,7 @@ func TestReaderWriteLF_CommitTx(t *testing.T) {
 }
 
 func TestReaderWriteLF_RollbackTx(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -303,32 +309,54 @@ func TestReaderWriteLF_RollbackTx(t *testing.T) {
 	mock.ExpectRollback()
 
 	tx := gDB.Begin()
-	err = rw.RollbackTx(tx)
+	err = rw.RollbackTx(ctx, tx)
 	assert.NoError(t, err, "RollbackTx should not return an error")
 	// Test CommitTx with UseTransactions = false
 	rw.UseTransactions = false
-	err = rw.CommitTx(gDB)
+	err = rw.CommitTx(ctx, gDB)
 	assert.NoError(t, err, "RollbackTx with no TX should not return an error")
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
+}
+
+func TestReaderWriteLF_RollbackTxError(t *testing.T) {
+	ctx := context.Background()
+	// Create a mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
+	defer closeIgnore(db)
+
+	gDB, err := gorm.Open(postgres.New(postgres.Config{
+		Conn:       db,
+		DriverName: "postgres",
+	}), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("Error creating gorm DB: %v", err)
+	}
+
+	// Test CommitTx with UseTransactions = true
+	rw := NewReaderWriterLF[testDBItemLF](gDB, newTestDBItemLF)
 
 	// Force an exception
 	rw.UseTransactions = true
 	mock.ExpectBegin()
 	mock.ExpectRollback().WillReturnError(gorm.ErrInvalidData)
-	tx2, err := rw.BeginTx()
+
+	tx2, err := rw.BeginTx(ctx)
 	assert.NoError(t, err, "BeginTx should not return an error")
-	err = rw.RollbackTx(tx2)
+	err = rw.RollbackTx(ctx, tx2)
 	assert.Error(t, err, "RollbackTx should return an error")
-	assert.Equal(t, gorm.ErrInvalidData, err, "Error should be gorm.ErrInvalidData")
+	assert.ErrorIs(t, err, gorm.ErrInvalidData, "Error should be gorm.ErrInvalidData")
 
 	// Verify all expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet(), "All expectations should be met")
-
 }
 
 func TestReaderWriteLF_Info(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -350,24 +378,25 @@ func TestReaderWriteLF_Info(t *testing.T) {
 	rw.Logger = logger
 
 	// Test Info without an item
-	rw.Info("test message", "test action")
+	rw.Info(ctx, "test message", "test action")
 	assert.True(t, logger.InfoCalled, "Info should call the logger's Info method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action", logger.LastAction, "Action should match")
 
 	// Test Info with an item
 	item := newTestDBItemLF("item1")
-	rw.Info("test message with item", "test action with item", item)
+	rw.Info(ctx, "test message with item", "test action with item", item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
 
 	// Test Info without a logger
 	rw.Logger = nil
-	rw.Info("test message without logger", "test action without logger")
+	rw.Info(ctx, "test message without logger", "test action without logger")
 	// No assertion needed, just make sure it doesn't panic
 }
 
 func TestReaderWriteLF_Warn(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, _, err := sqlmock.New()
 	if err != nil {
@@ -389,24 +418,25 @@ func TestReaderWriteLF_Warn(t *testing.T) {
 	rw.Logger = logger
 
 	// Test Warn without an item
-	rw.Warn("test message", "test action")
+	rw.Warn(ctx, "test message", "test action")
 	assert.True(t, logger.WarnCalled, "Warn should call the logger's Warn method")
 	assert.Equal(t, "test message", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action", logger.LastAction, "Action should match")
 
 	// Test Warn with an item
 	item := newTestDBItemLF("item1")
-	rw.Warn("test message with item", "test action with item", item)
+	rw.Warn(ctx, "test message with item", "test action with item", item)
 	assert.Equal(t, "test message with item", logger.LastMsg, "Message should match")
 	assert.Equal(t, "test action with item", logger.LastAction, "Action should match")
 
 	// Test Warn without a logger
 	rw.Logger = nil
-	rw.Warn("test message without logger", "test action without logger")
+	rw.Warn(ctx, "test message without logger", "test action without logger")
 	// No assertion needed, just make sure it doesn't panic
 }
 
 func TestGormReaderWriterLF_Integration(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock database
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	if err != nil {
@@ -437,7 +467,7 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 		WithArgs("item1", 1).
 		WillReturnRows(sqlmock.NewRows(testColumnsLF))
 
-	_, ok := cache.Load("item1")
+	_, ok := cache.Load(ctx, "item1")
 	assert.False(t, ok, "Item should not be found")
 
 	// Test saving and loading an item
@@ -445,7 +475,7 @@ func TestGormReaderWriterLF_Integration(t *testing.T) {
 	cache.Save(item)
 
 	// The item should be in the cache now
-	loadedItem, ok := cache.Load("item1")
+	loadedItem, ok := cache.Load(ctx, "item1")
 	assert.True(t, ok, "Item should be found")
 	assert.Equal(t, item.Value, loadedItem.Value, "Item value should match")
 

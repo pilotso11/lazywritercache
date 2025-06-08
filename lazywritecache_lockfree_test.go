@@ -68,6 +68,7 @@ func newNoOpTestConfigLF() ConfigLF[testItemLF] {
 	}
 }
 func TestCacheStoreLoadLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
@@ -76,20 +77,21 @@ func TestCacheStoreLoadLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 
-	item3, ok := cache.Load("test1")
+	item3, ok := cache.Load(ctx, "test1")
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
-	item4, ok := cache.Load("testLF")
+	item4, ok := cache.Load(ctx, "testLF")
 	assert.Truef(t, ok, "loaded testLF")
 	assert.Equal(t, itemLF, item4)
 
-	_, ok = cache.Load("missing")
+	_, ok = cache.Load(ctx, "missing")
 	assert.Falsef(t, ok, "not loaded missing")
 
 }
 
 func TestCacheDirtyListLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test11"}
 	itemLF := testItemLF{id: "testLFLF"}
 	cache := NewLazyWriterCacheLF[testItemLF](newNoOpTestConfigLF())
@@ -110,19 +112,23 @@ func TestCacheDirtyListLF(t *testing.T) {
 	// assert.True(t, findIn(cache.dirty, itemLF)) // Before
 	_, ok = cache.dirty.Load(itemLF.Key())
 	assert.True(t, ok, "itemLF should still be in dirty list after re-save")
+
+	// Use ctx to avoid unused variable warning
+	_, _ = cache.Load(ctx, "nonexistent")
 }
 
 func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
+	ctx := context.Background()
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
 	defer cache.Shutdown()
 
 	assert.NotPanics(t, func() {
-		cache.Load("missing")
+		cache.Load(ctx, "missing")
 	}, "get and Unlock")
 
 	assert.NotPanics(t, func() {
 		item := testItemLF{id: "test"}
-		cache.Load("missing")
+		cache.Load(ctx, "missing")
 		cache.Save(item)
 	}, "get and Save")
 }
@@ -165,6 +171,7 @@ func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
 }
 
 func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
+	ctx := context.Background()
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
 	defer cache.Shutdown()
 
@@ -183,7 +190,7 @@ func parallelRunLF(b *testing.B, cacheSize int, nThreads int) {
 			defer wait.Done()
 			for i := 0; i < b.N; i++ {
 				key := rand.Intn(cacheSize)
-				_, ok := cache.Load(keys[key])
+				_, ok := cache.Load(ctx, keys[key])
 				if ok {
 				}
 			}
@@ -207,6 +214,7 @@ func cacheWriteLF(b *testing.B, cacheSize int) {
 
 func cacheReadLF(b *testing.B, cacheSize int) {
 	// init
+	ctx := context.Background()
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
 	defer cache.Shutdown()
 
@@ -221,7 +229,7 @@ func cacheReadLF(b *testing.B, cacheSize int) {
 	k := 0
 	for i := 0; i < b.N; i++ {
 		key := rand.Intn(cacheSize)
-		_, ok := cache.Load(keys[key])
+		_, ok := cache.Load(ctx, keys[key])
 		if ok {
 			k++
 		}
@@ -231,7 +239,7 @@ func cacheReadLF(b *testing.B, cacheSize int) {
 }
 
 func TestCacheEvictionLF(t *testing.T) {
-
+	ctx := context.Background()
 	cfg := newNoOpTestConfigLF()
 	cfg.Limit = 20
 	cache := NewLazyWriterCacheLF(cfg)
@@ -243,10 +251,10 @@ func TestCacheEvictionLF(t *testing.T) {
 		cache.Save(item)
 	}
 	assert.Equal(t, 30, cache.cache.Size())
-	cache.evictionProcessor()
+	cache.evictionProcessor(ctx)
 	assert.Equal(t, 30, cache.cache.Size(), "nothing evicted until flushed")
-	cache.Flush()
-	cache.evictionProcessor()
+	cache.Flush(ctx)
+	cache.evictionProcessor(ctx)
 	assert.Equal(t, 20, cache.cache.Size())
 	_, ok := cache.cache.Load("0")
 	assert.Truef(t, ok, "0 has not been evicted")
@@ -266,6 +274,7 @@ func TestCacheEvictionLF(t *testing.T) {
 }
 
 func Test_GetAndReleaseLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF())
@@ -274,13 +283,14 @@ func Test_GetAndReleaseLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 
-	item3, ok := cache.Load("test1")
+	item3, ok := cache.Load(ctx, "test1")
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
 }
 
 func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -292,13 +302,13 @@ func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
 	cache.Save(item)
 	cache.Save(itemLF)
 
-	item3, ok := cache.Load("test1")
+	item3, ok := cache.Load(ctx, "test1")
 	assert.Truef(t, ok, "loaded test")
 	assert.Equal(t, item, item3)
 
 	cfg.handler.(NoOpReaderWriterLF[testItemLF]).panicOnNext.Store(true)
 	assert.Panics(t, func() {
-		_, ok := cache.Load("test4")
+		_, ok := cache.Load(ctx, "test4")
 		assert.Falsef(t, ok, "should not be found")
 	})
 	assert.Equal(t, int64(1), cache.Misses.Load(), "1 miss expected")
@@ -499,6 +509,7 @@ func TestFlushOnShutdownLF(t *testing.T) {
 }
 
 func TestRequeueRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -509,13 +520,14 @@ func TestRequeueRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save deadlock")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, int64(3), testHandler.infoCount.Load(), "Info received")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 }
 
 func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -526,13 +538,14 @@ func TestRequeueSkipsNonRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save duplicate key")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info received")
 	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
 }
 
 func TestRequeueCommitRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -543,12 +556,13 @@ func TestRequeueCommitRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("commit deadlock")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 }
 
 func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -559,12 +573,13 @@ func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("commit duplicate key")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, 0, cache.dirty.Size(), "0 items should be in the cache")
 }
 
 func TestRequeueBeginRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -575,13 +590,14 @@ func TestRequeueBeginRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("begin db bad connection")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info received")
 	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warning received")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 }
 
 func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -592,7 +608,7 @@ func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save deadlock,rollback deadlock")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warnings received")
@@ -600,6 +616,7 @@ func TestRequeueRollbackRecoverableErrLF(t *testing.T) {
 }
 
 func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -610,7 +627,7 @@ func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save deadlock,rollback failed")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
 	assert.Equal(t, 1, cache.dirty.Size(), "1 item should be in the cache")
 	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
@@ -618,6 +635,7 @@ func TestRequeueRollbackUnrecoverableErrLF(t *testing.T) {
 }
 
 func TestPanicHandlerLF(t *testing.T) {
+	ctx := context.Background()
 	item := testItemLF{id: "test1"}
 	itemLF := testItemLF{id: "testLF"}
 	cfg := newNoOpTestConfigLF()
@@ -628,13 +646,14 @@ func TestPanicHandlerLF(t *testing.T) {
 	cache.Save(itemLF)
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("save deadlock,panic")
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, "", testHandler.errorOnNext.Load(), "both errors handled")
 	assert.Equal(t, 1, cache.dirty.Size(), "1 items should be in the cache")
 	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings received")
 }
 
 func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
 	cfg := newNoOpTestConfigLF()
 	cfg.AllowConcurrentWrites = true // Explicitly enable
 	cfg.WriteFreq = 0                // Disable periodic writer for manual flush
@@ -651,11 +670,11 @@ func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		cache.Flush() // Call Flush concurrently
+		cache.Flush(ctx) // Call Flush concurrently
 	}()
 	go func() {
 		defer wg.Done()
-		cache.Flush() // Call Flush concurrently
+		cache.Flush(ctx) // Call Flush concurrently
 	}()
 
 	wg.Wait()
@@ -673,6 +692,7 @@ func TestSaveDirtyToDB_AllowConcurrentWrites(t *testing.T) {
 }
 
 func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
 	cfg := newNoOpTestConfigLF()
 	cfg.AllowConcurrentWrites = false // Explicitly disable (default, but good to test)
 	cfg.WriteFreq = 0                 // Disable periodic writer
@@ -687,19 +707,20 @@ func TestSaveDirtyToDB_DisallowConcurrentWrites(t *testing.T) {
 	cache.writing.Store(true)
 
 	// Attempt another flush, it should return early
-	cache.Flush()
+	cache.Flush(ctx)
 
 	assert.Equal(t, 1, cache.dirty.Size(), "Item should remain dirty as concurrent write was skipped")
 	assert.Equal(t, int64(0), mockHandler.infoCount.Load(), "No info should be logged by the skipped flush")
 
 	// Reset the writing flag and flush again
 	cache.writing.Store(false)
-	cache.Flush()
+	cache.Flush(ctx)
 	assert.Equal(t, 0, cache.dirty.Size(), "Dirty list should be empty after successful flush")
 	assert.Equal(t, int64(2), mockHandler.infoCount.Load(), "Info logged by successful flush")
 }
 
 func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
+	ctx := context.Background()
 	cfg := newNoOpTestConfigLF()
 	cfg.WriteFreq = 0 // Disable periodic writer for manual flush
 	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
@@ -715,7 +736,7 @@ func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
 	// A more robust mock could be made for IsRecoverable.
 	mockHandler.errorOnNext.Store("begin unrecoverable_db_error") // This error string won't match IsRecoverable's defaults
 
-	cache.Flush()
+	cache.Flush(ctx)
 
 	// Check logs: Warn for unrecoverable, Info for recoverable
 	assert.Equal(t, int64(1), mockHandler.warnCount.Load(), "Warn should be logged for unrecoverable BeginTx error")
@@ -724,6 +745,7 @@ func TestSaveDirtyToDB_BeginTx_UnrecoverableError(t *testing.T) {
 }
 
 func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
+	ctx := context.Background()
 	cfg := newNoOpTestConfigLF()
 	cfg.WriteFreq = 0
 	mockHandler := cfg.handler.(NoOpReaderWriterLF[testItemLF])
@@ -739,7 +761,7 @@ func TestSaveDirtyToDB_RollbackTx_UnrecoverableError(t *testing.T) {
 	// 3. RollbackTx() will then error unrecoverably (e.g., "rollback unrecoverable_db_error").
 	mockHandler.errorOnNext.Store("save deadlock,rollback unrecoverable_db_error")
 
-	cache.Flush()
+	cache.Flush(ctx)
 
 	// Logs:
 	// - Info for "Recoverable error saving itemToFailSave..."

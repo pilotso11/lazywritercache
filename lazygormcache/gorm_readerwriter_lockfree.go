@@ -23,6 +23,7 @@
 package lazygormcache
 
 import (
+	"context"
 	"errors"
 	"log"
 	"strings"
@@ -37,9 +38,9 @@ import (
 // LoggerLF is an interface that can be implemented to provide logging for the cache.
 // The default logger is log.Println.
 type LoggerLF interface {
-	Info(msg string, action string, item ...lazywritercache.CacheableLF)
-	Warn(msg string, action string, item ...lazywritercache.CacheableLF)
-	Error(msg string, action string, item ...lazywritercache.CacheableLF)
+	Info(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF)
+	Warn(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF)
+	Error(ctx context.Context, msg string, action string, item ...lazywritercache.CacheableLF)
 }
 
 // ReaderWriteLF is the GORM implementation of the CacheReaderWriter.   It should work with any DB GORM supports.
@@ -69,7 +70,7 @@ func NewReaderWriterLF[T lazywritercache.CacheableLF](db *gorm.DB, itemTemplate 
 	}
 }
 
-func (g ReaderWriteLF[T]) Find(key string, tx any) (T, error) {
+func (g ReaderWriteLF[T]) Find(ctx context.Context, key string, tx any) (T, error) {
 	var dbTx *gorm.DB
 	if tx == nil {
 		dbTx = g.db
@@ -79,7 +80,7 @@ func (g ReaderWriteLF[T]) Find(key string, tx any) (T, error) {
 
 	template := g.getTemplateItem(key)
 
-	res := dbTx.Limit(1).Find(&template, &template)
+	res := dbTx.Limit(1).WithContext(ctx).Find(&template, &template)
 
 	if res.Error != nil {
 		return template, res.Error
@@ -90,63 +91,62 @@ func (g ReaderWriteLF[T]) Find(key string, tx any) (T, error) {
 	return template, nil
 }
 
-func (g ReaderWriteLF[T]) Save(item T, tx any) error {
+func (g ReaderWriteLF[T]) Save(ctx context.Context, item T, tx any) error {
 	dbTx := tx.(*gorm.DB)
 	// Generics to the rescue!?
-	res := dbTx.Save(&item)
+	res := dbTx.WithContext(ctx).Save(&item)
 	return res.Error
 }
 
-func (g ReaderWriteLF[T]) BeginTx() (tx any, err error) {
+func (g ReaderWriteLF[T]) BeginTx(ctx context.Context) (tx any, err error) {
 	if g.UseTransactions {
-		tx = g.db.Begin()
+		tx = g.db.WithContext(ctx).Begin()
 		return tx, nil
 	}
 	return g.db, nil
 }
 
-func (g ReaderWriteLF[T]) CommitTx(tx any) (err error) {
+func (g ReaderWriteLF[T]) CommitTx(ctx context.Context, tx any) (err error) {
 	dbTx := tx.(*gorm.DB)
 	if g.UseTransactions {
-		err = dbTx.Commit().Error
+		err = dbTx.WithContext(ctx).Commit().Error
 	}
 	return err
 }
 
-func (g ReaderWriteLF[T]) RollbackTx(tx any) (err error) {
+func (g ReaderWriteLF[T]) RollbackTx(ctx context.Context, tx any) (err error) {
 	dbTx := tx.(*gorm.DB)
 	if g.UseTransactions {
-		dbTx.Rollback()
-		err = dbTx.Error
+		err = dbTx.WithContext(ctx).Rollback().Error
 	}
 	return err
 }
 
-func (g ReaderWriteLF[T]) Info(msg string, action string, item ...T) {
+func (g ReaderWriteLF[T]) Info(ctx context.Context, msg string, action string, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Info(msg, action, item[0])
+			g.Logger.Info(ctx, msg, action, item[0])
 		} else {
-			g.Logger.Info(msg, action)
+			g.Logger.Info(ctx, msg, action)
 		}
 	} else {
 		log.Println("[info] ", msg)
 	}
 }
 
-func (g ReaderWriteLF[T]) Warn(msg string, action string, item ...T) {
+func (g ReaderWriteLF[T]) Warn(ctx context.Context, msg string, action string, item ...T) {
 	if g.Logger != nil {
 		if len(item) > 0 {
-			g.Logger.Warn(msg, action, item[0])
+			g.Logger.Warn(ctx, msg, action, item[0])
 		} else {
-			g.Logger.Warn(msg, action)
+			g.Logger.Warn(ctx, msg, action)
 		}
 	} else {
 		log.Println("[warn] ", msg)
 	}
 }
 
-func (g ReaderWriteLF[T]) IsRecoverable(err error) bool {
+func (g ReaderWriteLF[T]) IsRecoverable(_ context.Context, err error) bool {
 	switch {
 	case errors.Is(err, gorm.ErrInvalidData):
 		return false
