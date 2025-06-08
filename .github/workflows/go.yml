@@ -66,5 +66,19 @@ jobs:
         github_token: ${{ github.token }}
         branch: ${{ github.head_ref }}
 
+    - name: Run benchmarks
+      run: |
+        go test -bench . | tee output.txt
 
-
+    - name: Store benchmark result
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Go Benchmark
+        tool: 'go'
+        output-file-path: output.txt
+        github-token: ${{ github.token }}
+        auto-push: true
+        alert-threshold: '200%'
+        comment-on-alert: true
+        fail-on-alert: true
+      

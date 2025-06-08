@@ -33,6 +33,7 @@ you could conceivably put a lazy write cache in front of redis with a fairly qui
 Benchmark results for cache size of 20k items and 100k items on macbook apple silicon.
 
 The lock-free implementation has roughy 2x performance pickup for many parallel reads at a roughly 2x write penalty.
+Benchmark [tracking results on GH Pages.](https://pilotso11.github.io/lazywritercache/dev/bench/)
 
 | Benchmark                | ns/op | b/op | allocs/op |
 |--------------------------|------:|-----:|----------:|
