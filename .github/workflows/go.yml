@@ -3,6 +3,14 @@
 
 name: Go
 
+# The benchmark-action (auto-push) and coverage-badge steps push to the
+# gh-pages / current branch, so the default GITHUB_TOKEN needs contents
+# write access. Without this the "Store benchmark result" step fails with
+# `git exit code 128` on every PR.
+permissions:
+  contents: write
+  pull-requests: write
+
 on:
   push:
     branches: [ "main" ]
