@@ -66,10 +66,9 @@ func (g NoOpReaderWriterLF[K, T]) Find(_ context.Context, key K, _ any) (T, erro
 	msg := g.errorOnNext.Load()
 	if msg != nil && strings.Contains(msg.(string), "find") {
 		g.removeFromErrorOnNext()
-		return g.getTemplateItem(key), errors.New("write " + msg.(string))
+		return g.getTemplateItem(key), errors.New("find " + msg.(string))
 	}
-	template := g.getTemplateItem(key)
-	return template, errors.New("NoOp, item not found")
+	return g.getTemplateItem(key), nil
 }
 
 func (g NoOpReaderWriterLF[K, T]) Save(_ context.Context, _ T, _ any) error {

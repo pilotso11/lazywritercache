@@ -130,9 +130,9 @@ func TestCacheDirtyListLF(t *testing.T) {
 	_, _ = cache.Load(ctx, "nonexistent")
 }
 
-// TestCacheLockUnlockNoPanicsLF ensures that basic cache operations
+// TestCacheEmptyNoPanicsLF ensures that basic cache operations
 // like Load and Save do not cause panics, even when items are missing.
-func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
+func TestCacheEmptyNoPanicsLF(t *testing.T) {
 	ctx := context.Background()
 	cache := NewLazyWriterCacheLF(newNoOpTestConfigLF[string]())
 	defer cache.Shutdown()
@@ -149,46 +149,46 @@ func TestCacheLockUnlockNoPanicsLF(t *testing.T) {
 }
 
 // BenchmarkCacheWriteMax20kLF benchmarks cache write performance with a cache size of 20,000.
-func BenchmarkCacheWriteMax20kLF(b *testing.B) {
+func Benchmark_LF_CacheWriteMax20k(b *testing.B) {
 	cacheWriteLF(b, 20000)
 }
 
-// BenchmarkCacheWriteMax100kLF benchmarks cache write performance with a cache size of 100,000.
-func BenchmarkCacheWriteMax100kLF(b *testing.B) {
+// Benchmark_LF_CacheWriteMax100k benchmarks cache write performance with a cache size of 100,000.
+func Benchmark_LF_CacheWriteMax100k(b *testing.B) {
 	cacheWriteLF(b, 100000)
 }
 
-// BenchmarkCacheRead20kLF benchmarks cache read performance with a cache size of 20,000.
-func BenchmarkCacheRead20kLF(b *testing.B) {
+// Benchmark_LF_CacheRead20k benchmarks cache read performance with a cache size of 20,000.
+func Benchmark_LF_CacheRead20k(b *testing.B) {
 	cacheReadLF(b, 20000)
 }
 
-// BenchmarkCacheRead100kLF benchmarks cache read performance with a cache size of 100,000.
-func BenchmarkCacheRead100kLF(b *testing.B) {
+// Benchmark_LF_CacheRead100k benchmarks cache read performance with a cache size of 100,000.
+func Benchmark_LF_CacheRead100k(b *testing.B) {
 	cacheReadLF(b, 100000)
 }
 
-// BenchmarkParallel_x5_CacheRead20kLF benchmarks parallel cache read performance
+// Benchmark_LF_Parallel_x5_CacheRead20k benchmarks parallel cache read performance
 // with a cache size of 20,000 and 5 concurrent threads.
-func BenchmarkParallel_x5_CacheRead20kLF(b *testing.B) {
+func Benchmark_LF_Parallel_x5_CacheRead20k(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 5
 
 	parallelRunLF(b, cacheSize, nThreads)
 }
 
-// BenchmarkParallel_x10_CacheRead20kLF benchmarks parallel cache read performance
+// Benchmark_LF_Parallel_x10_CacheRead20k benchmarks parallel cache read performance
 // with a cache size of 20,000 and 10 concurrent threads.
-func BenchmarkParallel_x10_CacheRead20kLF(b *testing.B) {
+func Benchmark_LF_Parallel_x10_CacheRead20k(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 10
 
 	parallelRunLF(b, cacheSize, nThreads)
 }
 
-// BenchmarkParallel_x20_CacheRead20kLF benchmarks parallel cache read performance
+// Benchmark_LF_Parallel_x20_CacheRead20k benchmarks parallel cache read performance
 // with a cache size of 20,000 and 20 concurrent threads.
-func BenchmarkParallel_x20_CacheRead20kLF(b *testing.B) {
+func Benchmark_LF_Parallel_x20_CacheRead20k(b *testing.B) {
 	cacheSize := 20000
 	nThreads := 20
 
@@ -439,9 +439,9 @@ func TestCacheEvictionRaceConditionLF(t *testing.T) {
 	assert.LessOrEqual(t, cache.cache.Size(), cfg.Limit, "Cache size should be at or below the limit after eviction")
 }
 
-// Test_GetAndReleaseLF is a simple test for Save and Load, similar to TestCacheStoreLoadLF.
+// Test_GetAndLoadLF is a simple test for Save and Load, similar to TestCacheStoreLoadLF.
 // It ensures items can be saved and then retrieved.
-func Test_GetAndReleaseLF(t *testing.T) {
+func Test_GetAndLoadLF(t *testing.T) {
 	ctx := context.Background()
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
@@ -457,10 +457,10 @@ func Test_GetAndReleaseLF(t *testing.T) {
 
 }
 
-// Test_GetAndReleaseWithForcedPanicLF tests the behavior when LookupOnMiss is true
+// Test_GetAndLoadWithForcedPanicLF tests the behavior when LookupOnMiss is true
 // and the underlying data Handler (NoOpReaderWriterLF) is configured to panic.
 // It verifies that a call to Load results in a panic.
-func Test_GetAndReleaseWithForcedPanicLF(t *testing.T) {
+func Test_GetAndLoadWithForcedPanicLF(t *testing.T) {
 	ctx := context.Background()
 	item := testItemLF[string]{id: "test1"}
 	itemLF := testItemLF[string]{id: "testLF"}
@@ -645,6 +645,32 @@ func TestPeriodicSaveLF(t *testing.T) {
 	assert.GreaterOrEqual(t, cache.DirtyWrites.Load(), int64(1), "DirtyWrites counter should be incremented")
 }
 
+// TestFlushWithErrOnLoadLF tests flush error handling if the load after write to the DB fails.
+func TestFlushWithErrOnLoadLF(t *testing.T) {
+	// Create a cache with a short write frequency
+	cfg := newNoOpTestConfigLF[string]()
+	testHandler := cfg.Handler.(NoOpReaderWriterLF[string, testItemLF[string]])
+	cfg.WriteFreq = 50 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := NewLazyWriterCacheWithContextLF[string, testItemLF[string]](ctx, cfg)
+	defer cancel()
+
+	// Add items to the cache
+	cache.Save(testItemLF[string]{id: "test1"})
+	cache.Save(testItemLF[string]{id: "test2"})
+
+	// Verify items are marked as dirty
+	assert.Equal(t, 2, cache.dirty.Size(), "Should have 2 dirty items")
+	testHandler.errorOnNext.Store("find not-found,find not-found")
+
+	cache.Flush(ctx)
+
+	// Verify dirty items were processed
+	assert.Equal(t, 1, cache.dirty.Size(), "Dirty list should have one item after lazy writer runs")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "detected failed load after save")
+}
+
 // TestPeriodicEvictionsLF tests the periodic eviction manager.
 // It sets a small cache Limit and short PurgeFreq, adds more items
 // than the limit, and verifies that the cache size is eventually
@@ -767,7 +793,8 @@ func TestRequeueCommitRecoverableErrLF(t *testing.T) {
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("commit deadlock") // Simulate recoverable commit error
 	cache.Flush(ctx)
-	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warnings for 'Recoverable error from CommitTx' and 'Error committing transaction'")
+	assert.Equal(t, int64(0), testHandler.warnCount.Load(), "Warnings")
+	assert.Equal(t, int64(2), testHandler.infoCount.Load(), "Info for 'Recoverable error from CommitTx' and 'Error committing transaction'")
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should still be dirty for retry")
 }
 
@@ -787,7 +814,7 @@ func TestRequeueCommitSkipsNonRecoverableErrLF(t *testing.T) {
 	assert.Equal(t, 2, cache.dirty.Size(), "2 items should be in the cache")
 	testHandler.errorOnNext.Store("commit duplicate key") // Simulate non-recoverable commit error
 	cache.Flush(ctx)
-	assert.Equal(t, int64(2), testHandler.warnCount.Load(), "Warnings for 'Unrecoverable error from CommitTx' and 'Error committing transaction'")
+	assert.Equal(t, int64(1), testHandler.warnCount.Load(), "Warnings for 'Unrecoverable error from CommitTx' and 'Error committing transaction'")
 	assert.Equal(t, 0, cache.dirty.Size(), "0 items should be dirty as commit failed unrecoverably")
 }
 
@@ -1072,4 +1099,19 @@ func TestCacheStoreLoadLF_CustomKey(t *testing.T) {
 
 	_, ok = cache.Load(ctx, CustomKey{part1: 3, part2: "one"})
 	assert.Falsef(t, ok, "not loaded missing")
+}
+
+func TestCacheAction_String(t *testing.T) {
+	tests := []struct {
+		a    CacheAction
+		want string
+	}{
+		{ActionWriteDirty, "write-dirty"},
+		{ActionEvict, "evict"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equalf(t, tt.want, tt.a.String(), "String()")
+		})
+	}
 }

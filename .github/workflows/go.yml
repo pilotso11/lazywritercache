@@ -22,71 +22,93 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        persist-credentials: true
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: 1.23
+      - name: Set up Go
+        uses: actions/setup-go@v5
 
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Build all modules
+        run: |
+          find . -name go.mod -not -path "./vendor/*" | while read -r modfile; do
+            moddir=$(dirname "$modfile")
+            echo "--- Building module in $moddir ---"
+            (cd "$moddir" && go build ./...)
+          done
 
-    - name: Build
-      run: go build -v ./...
+      - name: Test all modules and merge coverage
+        run: |
+          # Create a temporary file to hold all profiles
+          touch coverage.tmp.out
+          
+          # Find all go.mod files, run tests, and append coverage to the temp file
+          find . -name go.mod -not -path "./vendor/*" -not -path "./examples/*" | while read -r modfile; do
+            moddir=$(dirname "$modfile")
+            echo "--- Testing module in $moddir ---"
+            (
+              cd "$moddir"
+              go test -v -race -coverprofile=profile.tmp -covermode=atomic ./...
+              if [ -f profile.tmp ]; then
+                cat profile.tmp >> ../coverage.tmp.out
+              fi
+            )
+          done
+          
+          # Merge the coverage profiles, keeping only the first header
+          # This awk command prints the first line of the first file, and all subsequent lines of all files.
+          awk 'NR == 1 || FNR > 1' coverage.tmp.out > coverage.out
+          
+          # Generate the final coverage report
+          go tool cover -func=coverage.out -o=coverage.out
 
-    - name: Test
-      run: |
-        go test -v -race ./... -covermode=atomic -coverprofile=coverage.out
-        go tool cover -func=coverage.out -o=coverage.out
-        
-    - name: Go Coverage Badge
-      uses: tj-actions/coverage-badge-go@v2
-      with:
-        filename: coverage.out
+      - name: Go Coverage Badge
+        uses: tj-actions/coverage-badge-go@v2
+        with:
+          filename: coverage.out
 
-    - name: Verify changed files
-      uses: tj-actions/verify-changed-files@v16
-      id: verify-changed-files
-      with:
-        files: README.md
+      - name: Verify changed files
+        uses: tj-actions/verify-changed-files@v16
+        id: verify-changed-files
+        with:
+          files: README.md
 
-    - name: Commit coverage badge
-      if: steps.verify-changed-files.outputs.files_changed == 'true'
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add README.md
-        git commit -m "chore: Updated coverage badge."
+      - name: Commit coverage badge
+        if: steps.verify-changed-files.outputs.files_changed == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          git commit -m "chore: Updated coverage badge."
 
-    - name: Push coverage badge
-      if: steps.verify-changed-files.outputs.files_changed == 'true'
-      uses: ad-m/github-push-action@master
-      with:
-        github_token: ${{ github.token }}
-        branch: ${{ github.head_ref }}
+      - name: Push coverage badge
+        if: steps.verify-changed-files.outputs.files_changed == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ github.token }}
+          branch: ${{ github.head_ref }}
 
-    - name: Run benchmarks
-      run: |
-        go test -bench . | tee output.txt
+      - name: Run benchmarks on all modules
+        run: |
+          # Use > to create/truncate the output file
+          > output.txt
+          find . -name go.mod -not -path "./vendor/*" -not -path "./examples/*" | while read -r modfile; do
+            moddir=$(dirname "$modfile")
+            echo "--- Benchmarking module in $moddir ---"
+            # Run benchmarks for all packages in the module, including memory stats
+            # tee to stderr to see live output, append to output.txt for the action
+            (cd "$moddir" && go test -bench=./... -benchmem | tee -a /dev/stderr >> ../output.txt)
+          done
 
-    - name: Store benchmark result
-      uses: benchmark-action/github-action-benchmark@v1
-      with:
-        name: Go Benchmark
-        tool: 'go'
-        output-file-path: output.txt
-        github-token: ${{ github.token }}
-        auto-push: true
-        alert-threshold: '200%'
-        comment-on-alert: true
-        fail-on-alert: true
-      
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Go Benchmark
+          tool: 'go'
+          output-file-path: output.txt
+          github-token: ${{ github.token }}
+          auto-push: true
+          alert-threshold: '200%'
+          comment-on-alert: true
+          fail-on-alert: true

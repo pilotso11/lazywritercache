@@ -26,6 +26,8 @@ import (
 	"log"
 	"math/rand"
 
+	"github.com/pilotso11/lazywritercache/examples/samples"
+
 	"github.com/pilotso11/lazywritercache"
 	"github.com/pilotso11/lazywritercache/lazygormcache"
 
@@ -78,7 +80,7 @@ func main() {
 
 	// Do some work
 	for i := 1; i < 10000; i++ {
-		name := GetRandomName()
+		name := samples.GetRandomName()
 		doWork(cache, name)
 	}
 
@@ -95,7 +97,7 @@ func doWork(cache *lazywritercache.LazyWriterCache[string, Person], name string)
 	record, ok, _ := cache.GetAndLock(name)
 	defer cache.Unlock()
 	if !ok || rand.Float64() < 0.025 { // new or 2.5% random chance of update
-		person := Person{Name: name, City: GetRandomCity()}
+		person := Person{Name: name, City: samples.GetRandomCity()}
 		cache.Save(person)
 	} else {
 		if rand.Float64() < 0.0001 { // Print out a few random names we found
