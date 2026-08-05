@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1749417556358,
+  "lastUpdate": 1785961304700,
   "repoUrl": "https://github.com/pilotso11/lazywritercache",
   "entries": {
     "Go Benchmark": [
@@ -5468,6 +5468,362 @@ window.BENCHMARK_DATA = {
             "value": 0,
             "unit": "allocs/op",
             "extra": "307135 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "pilotso11",
+            "username": "pilotso11"
+          },
+          "committer": {
+            "name": "pilotso11",
+            "username": "pilotso11"
+          },
+          "id": "de4f19ccb0b03b3147d1dd74a477477392921621",
+          "message": "ci: grant contents:write so benchmark push stops failing CI",
+          "timestamp": "2025-06-08T21:18:29Z",
+          "url": "https://github.com/pilotso11/lazywritercache/pull/19/commits/de4f19ccb0b03b3147d1dd74a477477392921621"
+        },
+        "date": 1785961304119,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkCacheWriteMax20kLF",
+            "value": 337.1,
+            "unit": "ns/op\t     109 B/op\t       6 allocs/op",
+            "extra": "3435345 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20kLF - ns/op",
+            "value": 337.1,
+            "unit": "ns/op",
+            "extra": "3435345 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20kLF - B/op",
+            "value": 109,
+            "unit": "B/op",
+            "extra": "3435345 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20kLF - allocs/op",
+            "value": 6,
+            "unit": "allocs/op",
+            "extra": "3435345 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100kLF",
+            "value": 406.9,
+            "unit": "ns/op\t     116 B/op\t       7 allocs/op",
+            "extra": "2698258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100kLF - ns/op",
+            "value": 406.9,
+            "unit": "ns/op",
+            "extra": "2698258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100kLF - B/op",
+            "value": 116,
+            "unit": "B/op",
+            "extra": "2698258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100kLF - allocs/op",
+            "value": 7,
+            "unit": "allocs/op",
+            "extra": "2698258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20kLF",
+            "value": 76.17,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "15450686 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20kLF - ns/op",
+            "value": 76.17,
+            "unit": "ns/op",
+            "extra": "15450686 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20kLF - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "15450686 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20kLF - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "15450686 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100kLF",
+            "value": 98.04,
+            "unit": "ns/op\t       3 B/op\t       0 allocs/op",
+            "extra": "11160237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100kLF - ns/op",
+            "value": 98.04,
+            "unit": "ns/op",
+            "extra": "11160237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100kLF - B/op",
+            "value": 3,
+            "unit": "B/op",
+            "extra": "11160237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100kLF - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "11160237 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20kLF",
+            "value": 153.8,
+            "unit": "ns/op\t       1 B/op\t       0 allocs/op",
+            "extra": "7748881 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20kLF - ns/op",
+            "value": 153.8,
+            "unit": "ns/op",
+            "extra": "7748881 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20kLF - B/op",
+            "value": 1,
+            "unit": "B/op",
+            "extra": "7748881 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20kLF - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "7748881 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20kLF",
+            "value": 309.9,
+            "unit": "ns/op\t       2 B/op\t       0 allocs/op",
+            "extra": "3498058 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20kLF - ns/op",
+            "value": 309.9,
+            "unit": "ns/op",
+            "extra": "3498058 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20kLF - B/op",
+            "value": 2,
+            "unit": "B/op",
+            "extra": "3498058 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20kLF - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "3498058 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20kLF",
+            "value": 614.7,
+            "unit": "ns/op\t       4 B/op\t       0 allocs/op",
+            "extra": "1840945 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20kLF - ns/op",
+            "value": 614.7,
+            "unit": "ns/op",
+            "extra": "1840945 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20kLF - B/op",
+            "value": 4,
+            "unit": "B/op",
+            "extra": "1840945 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20kLF - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "1840945 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20k",
+            "value": 265.9,
+            "unit": "ns/op\t     134 B/op\t       3 allocs/op",
+            "extra": "4187307 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20k - ns/op",
+            "value": 265.9,
+            "unit": "ns/op",
+            "extra": "4187307 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20k - B/op",
+            "value": 134,
+            "unit": "B/op",
+            "extra": "4187307 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax20k - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "4187307 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100k",
+            "value": 288.5,
+            "unit": "ns/op\t     155 B/op\t       3 allocs/op",
+            "extra": "4312266 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100k - ns/op",
+            "value": 288.5,
+            "unit": "ns/op",
+            "extra": "4312266 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100k - B/op",
+            "value": 155,
+            "unit": "B/op",
+            "extra": "4312266 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheWriteMax100k - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "4312266 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20k",
+            "value": 80.07,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "13162274 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20k - ns/op",
+            "value": 80.07,
+            "unit": "ns/op",
+            "extra": "13162274 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20k - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "13162274 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead20k - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "13162274 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100k",
+            "value": 103,
+            "unit": "ns/op\t       3 B/op\t       0 allocs/op",
+            "extra": "11059286 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100k - ns/op",
+            "value": 103,
+            "unit": "ns/op",
+            "extra": "11059286 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100k - B/op",
+            "value": 3,
+            "unit": "B/op",
+            "extra": "11059286 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkCacheRead100k - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "11059286 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20k",
+            "value": 649.3,
+            "unit": "ns/op\t       4 B/op\t       0 allocs/op",
+            "extra": "1806188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20k - ns/op",
+            "value": 649.3,
+            "unit": "ns/op",
+            "extra": "1806188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20k - B/op",
+            "value": 4,
+            "unit": "B/op",
+            "extra": "1806188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x5_CacheRead20k - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "1806188 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20k",
+            "value": 1509,
+            "unit": "ns/op\t      10 B/op\t       0 allocs/op",
+            "extra": "795560 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20k - ns/op",
+            "value": 1509,
+            "unit": "ns/op",
+            "extra": "795560 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20k - B/op",
+            "value": 10,
+            "unit": "B/op",
+            "extra": "795560 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x10_CacheRead20k - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "795560 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20k",
+            "value": 3676,
+            "unit": "ns/op\t      26 B/op\t       0 allocs/op",
+            "extra": "328197 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20k - ns/op",
+            "value": 3676,
+            "unit": "ns/op",
+            "extra": "328197 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20k - B/op",
+            "value": 26,
+            "unit": "B/op",
+            "extra": "328197 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParallel_x20_CacheRead20k - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "328197 times\n4 procs"
           }
         ]
       }
